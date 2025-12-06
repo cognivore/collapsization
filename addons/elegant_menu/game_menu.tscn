@@ -139,10 +139,10 @@ text = "Edge Pan"
 custom_minimum_size = Vector2(160, 0)
 layout_mode = 2
 size_flags_horizontal = 3
-min_value = 100.0
-max_value = 1500.0
-step = 50.0
-value = 600.0
+min_value = 164.0
+max_value = 1640.0
+step = 82.0
+value = 820.0
 
 [node name="Value" type="Label" parent="MenuPanel/MarginContainer/SettingsMenu/EdgeSpeed"]
 custom_minimum_size = Vector2(50, 0)
