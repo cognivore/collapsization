@@ -81,30 +81,30 @@ func _handle_drag() -> void:
 func _handle_edge_pan(dt: float) -> void:
 	if dragging:
 		return
-	
+
 	var viewport := get_viewport()
 	var screen_size := viewport.get_visible_rect().size
 	var mouse_pos := viewport.get_mouse_position()
-	
+
 	var pan_dir := Vector2.ZERO
-	
+
 	if mouse_pos.x < edge_pan_margin:
 		pan_dir.x -= 1.0
 	elif mouse_pos.x > screen_size.x - edge_pan_margin:
 		pan_dir.x += 1.0
-	
+
 	if mouse_pos.y < edge_pan_margin:
 		pan_dir.y -= 1.0
 	elif mouse_pos.y > screen_size.y - edge_pan_margin:
 		pan_dir.y += 1.0
-	
+
 	if pan_dir != Vector2.ZERO:
 		global_position += pan_dir.normalized() * edge_pan_speed * dt / zoom.x
 
 
 func _handle_arrow_pan(dt: float) -> void:
 	var pan_dir := Vector2.ZERO
-	
+
 	if Input.is_action_pressed("ui_left"):
 		pan_dir.x -= 1.0
 	if Input.is_action_pressed("ui_right"):
@@ -113,7 +113,7 @@ func _handle_arrow_pan(dt: float) -> void:
 		pan_dir.y -= 1.0
 	if Input.is_action_pressed("ui_down"):
 		pan_dir.y += 1.0
-	
+
 	if pan_dir != Vector2.ZERO:
 		global_position += pan_dir.normalized() * keyboard_pan_speed * dt / zoom.x
 
@@ -123,7 +123,7 @@ func _handle_esc_quit(dt: float) -> void:
 	if has_node("/root/GameMenu") and get_node("/root/GameMenu").is_open:
 		esc_held_time = 0.0
 		return
-	
+
 	if Input.is_action_pressed("ui_cancel"):
 		esc_held_time += dt
 		var secs_left := esc_hold_duration - esc_held_time

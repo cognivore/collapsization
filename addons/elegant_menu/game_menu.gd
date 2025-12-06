@@ -23,11 +23,11 @@ const SettingsManagerScript := preload("res://addons/elegant_menu/settings_manag
 func _ready() -> void:
 	settings = SettingsManagerScript.new()
 	add_child(settings)
-	
+
 	menu_panel.visible = false
 	_show_main_menu()
 	_sync_sliders_to_settings()
-	
+
 	# Connect sliders
 	keyboard_speed_slider.value_changed.connect(_on_keyboard_speed_changed)
 	mouse_speed_slider.value_changed.connect(_on_mouse_speed_changed)

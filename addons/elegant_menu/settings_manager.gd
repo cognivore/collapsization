@@ -36,7 +36,7 @@ func _ready() -> void:
 func load_settings() -> void:
 	if config.load(SETTINGS_PATH) != OK:
 		return
-	
+
 	keyboard_pan_speed = config.get_value("camera", "keyboard_pan_speed", 800.0)
 	mouse_pan_speed = config.get_value("camera", "mouse_pan_speed", 1.0)
 	edge_pan_speed = config.get_value("camera", "edge_pan_speed", 600.0)
