@@ -1,0 +1,178 @@
+[gd_scene load_steps=3 format=3 uid="uid://elegant_game_menu"]
+
+[ext_resource type="Script" path="res://addons/elegant_menu/game_menu.gd" id="1_script"]
+[ext_resource type="Theme" uid="uid://elegant_menu_theme" path="res://addons/elegant_menu/elegant_theme.tres" id="2_theme"]
+
+[node name="GameMenu" type="CanvasLayer"]
+layer = 100
+process_mode = 3
+script = ExtResource("1_script")
+
+[node name="Overlay" type="ColorRect" parent="."]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 0.5)
+
+[node name="MenuPanel" type="PanelContainer" parent="."]
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -200.0
+offset_top = -180.0
+offset_right = 200.0
+offset_bottom = 180.0
+grow_horizontal = 2
+grow_vertical = 2
+theme = ExtResource("2_theme")
+
+[node name="MarginContainer" type="MarginContainer" parent="MenuPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 24
+theme_override_constants/margin_top = 24
+theme_override_constants/margin_right = 24
+theme_override_constants/margin_bottom = 24
+
+[node name="MainMenu" type="VBoxContainer" parent="MenuPanel/MarginContainer"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Title" type="Label" parent="MenuPanel/MarginContainer/MainMenu"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 28
+text = "MENU"
+horizontal_alignment = 1
+
+[node name="Spacer" type="Control" parent="MenuPanel/MarginContainer/MainMenu"]
+custom_minimum_size = Vector2(0, 20)
+layout_mode = 2
+
+[node name="ResumeButton" type="Button" parent="MenuPanel/MarginContainer/MainMenu"]
+custom_minimum_size = Vector2(0, 44)
+layout_mode = 2
+text = "Resume"
+
+[node name="SettingsButton" type="Button" parent="MenuPanel/MarginContainer/MainMenu"]
+custom_minimum_size = Vector2(0, 44)
+layout_mode = 2
+text = "Settings"
+
+[node name="ExitButton" type="Button" parent="MenuPanel/MarginContainer/MainMenu"]
+custom_minimum_size = Vector2(0, 44)
+layout_mode = 2
+text = "Exit Game"
+
+[node name="SettingsMenu" type="VBoxContainer" parent="MenuPanel/MarginContainer"]
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="Title" type="Label" parent="MenuPanel/MarginContainer/SettingsMenu"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 24
+text = "SETTINGS"
+horizontal_alignment = 1
+
+[node name="Spacer" type="Control" parent="MenuPanel/MarginContainer/SettingsMenu"]
+custom_minimum_size = Vector2(0, 8)
+layout_mode = 2
+
+[node name="KeyboardSpeed" type="HBoxContainer" parent="MenuPanel/MarginContainer/SettingsMenu"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="MenuPanel/MarginContainer/SettingsMenu/KeyboardSpeed"]
+custom_minimum_size = Vector2(120, 0)
+layout_mode = 2
+text = "Keyboard Pan"
+
+[node name="HSlider" type="HSlider" parent="MenuPanel/MarginContainer/SettingsMenu/KeyboardSpeed"]
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = 200.0
+max_value = 2000.0
+step = 50.0
+value = 800.0
+
+[node name="Value" type="Label" parent="MenuPanel/MarginContainer/SettingsMenu/KeyboardSpeed"]
+custom_minimum_size = Vector2(50, 0)
+layout_mode = 2
+text = "800"
+horizontal_alignment = 2
+
+[node name="MouseSpeed" type="HBoxContainer" parent="MenuPanel/MarginContainer/SettingsMenu"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="MenuPanel/MarginContainer/SettingsMenu/MouseSpeed"]
+custom_minimum_size = Vector2(120, 0)
+layout_mode = 2
+text = "Mouse Pan"
+
+[node name="HSlider" type="HSlider" parent="MenuPanel/MarginContainer/SettingsMenu/MouseSpeed"]
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = 0.2
+max_value = 3.0
+step = 0.1
+value = 1.0
+
+[node name="Value" type="Label" parent="MenuPanel/MarginContainer/SettingsMenu/MouseSpeed"]
+custom_minimum_size = Vector2(50, 0)
+layout_mode = 2
+text = "1.0"
+horizontal_alignment = 2
+
+[node name="EdgeSpeed" type="HBoxContainer" parent="MenuPanel/MarginContainer/SettingsMenu"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="MenuPanel/MarginContainer/SettingsMenu/EdgeSpeed"]
+custom_minimum_size = Vector2(120, 0)
+layout_mode = 2
+text = "Edge Pan"
+
+[node name="HSlider" type="HSlider" parent="MenuPanel/MarginContainer/SettingsMenu/EdgeSpeed"]
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = 100.0
+max_value = 1500.0
+step = 50.0
+value = 600.0
+
+[node name="Value" type="Label" parent="MenuPanel/MarginContainer/SettingsMenu/EdgeSpeed"]
+custom_minimum_size = Vector2(50, 0)
+layout_mode = 2
+text = "600"
+horizontal_alignment = 2
+
+[node name="Spacer2" type="Control" parent="MenuPanel/MarginContainer/SettingsMenu"]
+custom_minimum_size = Vector2(0, 8)
+layout_mode = 2
+
+[node name="Buttons" type="HBoxContainer" parent="MenuPanel/MarginContainer/SettingsMenu"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="BackButton" type="Button" parent="MenuPanel/MarginContainer/SettingsMenu/Buttons"]
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Back"
+
+[node name="ResetButton" type="Button" parent="MenuPanel/MarginContainer/SettingsMenu/Buttons"]
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Reset"
+
+[connection signal="pressed" from="MenuPanel/MarginContainer/MainMenu/ResumeButton" to="." method="_on_resume_pressed"]
+[connection signal="pressed" from="MenuPanel/MarginContainer/MainMenu/SettingsButton" to="." method="_on_settings_pressed"]
+[connection signal="pressed" from="MenuPanel/MarginContainer/MainMenu/ExitButton" to="." method="_on_exit_pressed"]
+[connection signal="pressed" from="MenuPanel/MarginContainer/SettingsMenu/Buttons/BackButton" to="." method="_on_back_pressed"]
+[connection signal="pressed" from="MenuPanel/MarginContainer/SettingsMenu/Buttons/ResetButton" to="." method="_on_reset_pressed"]
+
