@@ -1,0 +1,21 @@
+[gd_resource type="TileSet" load_steps=3 format=3 uid="uid://green_hex_tileset"]
+
+[ext_resource type="Texture2D" uid="uid://bay24yvwkqxim" path="res://addons/hexagon_tilemaplayer/demo/tile_horizontal.png" id="1_tex"]
+
+[sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_green"]
+texture = ExtResource("1_tex")
+texture_region_size = Vector2i(164, 190)
+0:0/next_alternative_id = 3
+0:0/0 = 0
+0:0/0/modulate = Color(0.5647, 0.9333, 0.5647, 1)
+0:0/1 = 1
+0:0/1/modulate = Color(0.1804, 0.8, 0.4431, 1)
+0:0/2 = 2
+0:0/2/modulate = Color(0.1176, 0.5176, 0.2863, 1)
+
+[resource]
+resource_name = "GreenGradient"
+tile_shape = 3
+tile_size = Vector2i(164, 190)
+sources/1 = SubResource("TileSetAtlasSource_green")
+
