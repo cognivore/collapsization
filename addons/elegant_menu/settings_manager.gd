@@ -58,3 +58,4 @@ func reset_to_defaults() -> void:
 	edge_pan_margin = 20.0
 	save_settings()
 
+

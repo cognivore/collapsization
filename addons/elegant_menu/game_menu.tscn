@@ -176,3 +176,4 @@ text = "Reset"
 [connection signal="pressed" from="MenuPanel/MarginContainer/SettingsMenu/Buttons/BackButton" to="." method="_on_back_pressed"]
 [connection signal="pressed" from="MenuPanel/MarginContainer/SettingsMenu/Buttons/ResetButton" to="." method="_on_reset_pressed"]
 
+
