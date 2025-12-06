@@ -2,23 +2,24 @@ extends Node
 class_name SettingsManager
 
 const SETTINGS_PATH := "user://settings.cfg"
+const TILE_WIDTH := 164.0  # pixels per tile
 
 signal settings_changed
 
 var config := ConfigFile.new()
 
-# Camera settings with defaults
-var keyboard_pan_speed: float = 800.0:
+# Camera settings in tiles/sec (converted to pixels in camera)
+var keyboard_pan_speed: float = 40.0:  # tiles/sec
 	set(v):
 		keyboard_pan_speed = v
 		settings_changed.emit()
 
-var mouse_pan_speed: float = 1.0:
+var mouse_pan_speed: float = 40.0:  # tiles/sec for drag
 	set(v):
 		mouse_pan_speed = v
 		settings_changed.emit()
 
-var edge_pan_speed: float = 3280.0:  # ~20 tiles/sec (tile width ~164px)
+var edge_pan_speed: float = 40.0:  # tiles/sec
 	set(v):
 		edge_pan_speed = v
 		settings_changed.emit()
@@ -36,10 +37,10 @@ func _ready() -> void:
 func load_settings() -> void:
 	if config.load(SETTINGS_PATH) != OK:
 		return
-
-	keyboard_pan_speed = config.get_value("camera", "keyboard_pan_speed", 800.0)
-	mouse_pan_speed = config.get_value("camera", "mouse_pan_speed", 1.0)
-	edge_pan_speed = config.get_value("camera", "edge_pan_speed", 3280.0)
+	
+	keyboard_pan_speed = config.get_value("camera", "keyboard_pan_speed", 40.0)
+	mouse_pan_speed = config.get_value("camera", "mouse_pan_speed", 40.0)
+	edge_pan_speed = config.get_value("camera", "edge_pan_speed", 40.0)
 	edge_pan_margin = config.get_value("camera", "edge_pan_margin", 20.0)
 
 
@@ -52,10 +53,8 @@ func save_settings() -> void:
 
 
 func reset_to_defaults() -> void:
-	keyboard_pan_speed = 800.0
-	mouse_pan_speed = 1.0
-	edge_pan_speed = 3280.0
+	keyboard_pan_speed = 40.0
+	mouse_pan_speed = 40.0
+	edge_pan_speed = 40.0
 	edge_pan_margin = 20.0
 	save_settings()
-
-

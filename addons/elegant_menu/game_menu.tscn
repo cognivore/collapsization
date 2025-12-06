@@ -93,15 +93,15 @@ text = "Keyboard Pan"
 custom_minimum_size = Vector2(160, 0)
 layout_mode = 2
 size_flags_horizontal = 3
-min_value = 200.0
-max_value = 2000.0
-step = 50.0
-value = 800.0
+min_value = 10.0
+max_value = 80.0
+step = 5.0
+value = 40.0
 
 [node name="Value" type="Label" parent="MenuPanel/MarginContainer/SettingsMenu/KeyboardSpeed"]
 custom_minimum_size = Vector2(50, 0)
 layout_mode = 2
-text = "800"
+text = "40 t/s"
 horizontal_alignment = 2
 
 [node name="MouseSpeed" type="HBoxContainer" parent="MenuPanel/MarginContainer/SettingsMenu"]
@@ -116,15 +116,15 @@ text = "Mouse Pan"
 custom_minimum_size = Vector2(160, 0)
 layout_mode = 2
 size_flags_horizontal = 3
-min_value = 0.2
-max_value = 3.0
-step = 0.1
-value = 1.0
+min_value = 10.0
+max_value = 80.0
+step = 5.0
+value = 40.0
 
 [node name="Value" type="Label" parent="MenuPanel/MarginContainer/SettingsMenu/MouseSpeed"]
 custom_minimum_size = Vector2(50, 0)
 layout_mode = 2
-text = "1.0"
+text = "40 t/s"
 horizontal_alignment = 2
 
 [node name="EdgeSpeed" type="HBoxContainer" parent="MenuPanel/MarginContainer/SettingsMenu"]
@@ -139,15 +139,15 @@ text = "Edge Pan"
 custom_minimum_size = Vector2(160, 0)
 layout_mode = 2
 size_flags_horizontal = 3
-min_value = 1640.0
-max_value = 13120.0
-step = 820.0
-value = 3280.0
+min_value = 10.0
+max_value = 80.0
+step = 5.0
+value = 40.0
 
 [node name="Value" type="Label" parent="MenuPanel/MarginContainer/SettingsMenu/EdgeSpeed"]
 custom_minimum_size = Vector2(50, 0)
 layout_mode = 2
-text = "600"
+text = "40 t/s"
 horizontal_alignment = 2
 
 [node name="Spacer2" type="Control" parent="MenuPanel/MarginContainer/SettingsMenu"]

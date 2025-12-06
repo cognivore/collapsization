@@ -83,9 +83,9 @@ func _sync_sliders_to_settings() -> void:
 
 
 func _update_value_labels() -> void:
-	keyboard_speed_value.text = str(int(keyboard_speed_slider.value))
-	mouse_speed_value.text = "%.1f" % mouse_speed_slider.value
-	edge_speed_value.text = str(int(edge_speed_slider.value))
+	keyboard_speed_value.text = "%d t/s" % int(keyboard_speed_slider.value)
+	mouse_speed_value.text = "%d t/s" % int(mouse_speed_slider.value)
+	edge_speed_value.text = "%d t/s" % int(edge_speed_slider.value)
 
 
 func _on_keyboard_speed_changed(value: float) -> void:

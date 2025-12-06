@@ -1,13 +1,15 @@
 extends Camera2D
 
+const TILE_WIDTH := 164.0  # pixels per tile
+
 @export var zoom_min: float = 0.25
 @export var zoom_max: float = 4.0
 @export var zoom_step: float = 0.1
 
-# Pan settings (synced from GameMenu settings)
-var keyboard_pan_speed: float = 800.0
-var mouse_pan_speed: float = 1.0
-var edge_pan_speed: float = 3280.0  # ~20 tiles/sec
+# Pan settings in tiles/sec (synced from GameMenu settings)
+var keyboard_pan_speed: float = 40.0  # tiles/sec
+var mouse_pan_speed: float = 40.0  # tiles/sec
+var edge_pan_speed: float = 40.0  # tiles/sec
 var edge_pan_margin: float = 20.0
 
 var dragging := false
@@ -69,36 +71,39 @@ func _process(dt: float) -> void:
 func _handle_drag() -> void:
 	if dragging:
 		var mouse_delta := get_global_mouse_position() - drag_mouse_start
-		global_position = drag_cam_start - mouse_delta * mouse_pan_speed / zoom
+		# Convert tiles/sec to pixels for drag sensitivity
+		var speed_px := mouse_pan_speed * TILE_WIDTH / 40.0  # normalize so 40 t/s = 1x
+		global_position = drag_cam_start - mouse_delta * speed_px / zoom
 
 
 func _handle_edge_pan(dt: float) -> void:
 	if dragging:
 		return
-
+	
 	var viewport := get_viewport()
 	var screen_size := viewport.get_visible_rect().size
 	var mouse_pos := viewport.get_mouse_position()
-
+	
 	var pan_dir := Vector2.ZERO
-
+	
 	if mouse_pos.x < edge_pan_margin:
 		pan_dir.x -= 1.0
 	elif mouse_pos.x > screen_size.x - edge_pan_margin:
 		pan_dir.x += 1.0
-
+	
 	if mouse_pos.y < edge_pan_margin:
 		pan_dir.y -= 1.0
 	elif mouse_pos.y > screen_size.y - edge_pan_margin:
 		pan_dir.y += 1.0
-
+	
 	if pan_dir != Vector2.ZERO:
-		global_position += pan_dir.normalized() * edge_pan_speed * dt / zoom.x
+		var speed_px := edge_pan_speed * TILE_WIDTH
+		global_position += pan_dir.normalized() * speed_px * dt / zoom.x
 
 
 func _handle_arrow_pan(dt: float) -> void:
 	var pan_dir := Vector2.ZERO
-
+	
 	if Input.is_action_pressed("ui_left"):
 		pan_dir.x -= 1.0
 	if Input.is_action_pressed("ui_right"):
@@ -107,9 +112,10 @@ func _handle_arrow_pan(dt: float) -> void:
 		pan_dir.y -= 1.0
 	if Input.is_action_pressed("ui_down"):
 		pan_dir.y += 1.0
-
+	
 	if pan_dir != Vector2.ZERO:
-		global_position += pan_dir.normalized() * keyboard_pan_speed * dt / zoom.x
+		var speed_px := keyboard_pan_speed * TILE_WIDTH
+		global_position += pan_dir.normalized() * speed_px * dt / zoom.x
 
 
 func _apply_zoom(mult: float) -> void:
