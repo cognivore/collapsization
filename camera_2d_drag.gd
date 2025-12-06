@@ -7,7 +7,7 @@ extends Camera2D
 # Pan settings (synced from GameMenu settings)
 var keyboard_pan_speed: float = 800.0
 var mouse_pan_speed: float = 1.0
-var edge_pan_speed: float = 820.0  # ~5 tiles/sec
+var edge_pan_speed: float = 3280.0  # ~20 tiles/sec
 var edge_pan_margin: float = 20.0
 
 var dragging := false

@@ -18,7 +18,7 @@ var mouse_pan_speed: float = 1.0:
 		mouse_pan_speed = v
 		settings_changed.emit()
 
-var edge_pan_speed: float = 820.0:  # ~5 tiles/sec (tile width ~164px)
+var edge_pan_speed: float = 3280.0:  # ~20 tiles/sec (tile width ~164px)
 	set(v):
 		edge_pan_speed = v
 		settings_changed.emit()
@@ -39,7 +39,7 @@ func load_settings() -> void:
 
 	keyboard_pan_speed = config.get_value("camera", "keyboard_pan_speed", 800.0)
 	mouse_pan_speed = config.get_value("camera", "mouse_pan_speed", 1.0)
-	edge_pan_speed = config.get_value("camera", "edge_pan_speed", 820.0)
+	edge_pan_speed = config.get_value("camera", "edge_pan_speed", 3280.0)
 	edge_pan_margin = config.get_value("camera", "edge_pan_margin", 20.0)
 
 
@@ -54,7 +54,7 @@ func save_settings() -> void:
 func reset_to_defaults() -> void:
 	keyboard_pan_speed = 800.0
 	mouse_pan_speed = 1.0
-	edge_pan_speed = 820.0
+	edge_pan_speed = 3280.0
 	edge_pan_margin = 20.0
 	save_settings()
 
