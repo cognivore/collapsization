@@ -1,8 +1,10 @@
-[gd_scene load_steps=4 format=3 uid="uid://cn1lu8olilord"]
+[gd_scene load_steps=6 format=3 uid="uid://cn1lu8olilord"]
 
 [ext_resource type="Script" path="res://camera_2d_drag.gd" id="1_camera"]
 [ext_resource type="TileSet" path="res://green_tileset.tres" id="2_tileset"]
 [ext_resource type="Script" path="res://hex_field.gd" id="3_hexfield"]
+[ext_resource type="Script" path="res://addons/netcode/cursor_sync.gd" id="4_cursorsync"]
+[ext_resource type="Script" path="res://addons/netcode/cursor_simulator.gd" id="5_simulator"]
 
 [node name="World" type="Node2D"]
 
@@ -10,6 +12,12 @@
 tile_set = ExtResource("2_tileset")
 script = ExtResource("3_hexfield")
 metadata/_custom_type_script = "uid://buj6ft1vvdf2f"
+
+[node name="CursorSync" type="Node" parent="."]
+script = ExtResource("4_cursorsync")
+
+[node name="CursorSimulator" type="Node" parent="."]
+script = ExtResource("5_simulator")
 
 [node name="Camera2D" type="Camera2D" parent="."]
 script = ExtResource("1_camera")

@@ -1,3 +1,9 @@
 # Godot 4+ specific ignores
 .godot/
 /android/
+
+# Network debug logs (user:// maps to ~/.local/share/godot/app_userdata/ on Linux,
+# ~/Library/Application Support/Godot/app_userdata/ on macOS)
+# These are stored outside the project, but just in case:
+logs/
+*.log

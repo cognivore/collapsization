@@ -23,9 +23,9 @@ anchor_top = 0.5
 anchor_right = 0.5
 anchor_bottom = 0.5
 offset_left = -200.0
-offset_top = -180.0
+offset_top = -200.0
 offset_right = 200.0
-offset_bottom = 180.0
+offset_bottom = 200.0
 grow_horizontal = 2
 grow_vertical = 2
 theme = ExtResource("2_theme")
@@ -69,7 +69,7 @@ text = "Exit Game"
 [node name="SettingsMenu" type="VBoxContainer" parent="MenuPanel/MarginContainer"]
 visible = false
 layout_mode = 2
-theme_override_constants/separation = 16
+theme_override_constants/separation = 12
 
 [node name="Title" type="Label" parent="MenuPanel/MarginContainer/SettingsMenu"]
 layout_mode = 2
@@ -78,8 +78,43 @@ text = "SETTINGS"
 horizontal_alignment = 1
 
 [node name="Spacer" type="Control" parent="MenuPanel/MarginContainer/SettingsMenu"]
-custom_minimum_size = Vector2(0, 8)
+custom_minimum_size = Vector2(0, 4)
 layout_mode = 2
+
+[node name="PlayerColor" type="HBoxContainer" parent="MenuPanel/MarginContainer/SettingsMenu"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="MenuPanel/MarginContainer/SettingsMenu/PlayerColor"]
+custom_minimum_size = Vector2(120, 0)
+layout_mode = 2
+text = "Player Color"
+
+[node name="ColorOption" type="OptionButton" parent="MenuPanel/MarginContainer/SettingsMenu/PlayerColor"]
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+item_count = 8
+popup/item_0/text = "Tan"
+popup/item_0/id = 0
+popup/item_1/text = "Blue"
+popup/item_1/id = 1
+popup/item_2/text = "Orange"
+popup/item_2/id = 2
+popup/item_3/text = "Green"
+popup/item_3/id = 3
+popup/item_4/text = "Lime"
+popup/item_4/id = 4
+popup/item_5/text = "Red"
+popup/item_5/id = 5
+popup/item_6/text = "Brown"
+popup/item_6/id = 6
+popup/item_7/text = "Maroon"
+popup/item_7/id = 7
+
+[node name="ColorPreview" type="ColorRect" parent="MenuPanel/MarginContainer/SettingsMenu/PlayerColor"]
+custom_minimum_size = Vector2(30, 0)
+layout_mode = 2
+color = Color(0.831373, 0.647059, 0.454902, 1)
 
 [node name="KeyboardSpeed" type="HBoxContainer" parent="MenuPanel/MarginContainer/SettingsMenu"]
 layout_mode = 2
@@ -151,7 +186,7 @@ text = "40 t/s"
 horizontal_alignment = 2
 
 [node name="Spacer2" type="Control" parent="MenuPanel/MarginContainer/SettingsMenu"]
-custom_minimum_size = Vector2(0, 8)
+custom_minimum_size = Vector2(0, 4)
 layout_mode = 2
 
 [node name="Buttons" type="HBoxContainer" parent="MenuPanel/MarginContainer/SettingsMenu"]
@@ -173,7 +208,6 @@ text = "Reset"
 [connection signal="pressed" from="MenuPanel/MarginContainer/MainMenu/ResumeButton" to="." method="_on_resume_pressed"]
 [connection signal="pressed" from="MenuPanel/MarginContainer/MainMenu/SettingsButton" to="." method="_on_settings_pressed"]
 [connection signal="pressed" from="MenuPanel/MarginContainer/MainMenu/ExitButton" to="." method="_on_exit_pressed"]
+[connection signal="item_selected" from="MenuPanel/MarginContainer/SettingsMenu/PlayerColor/ColorOption" to="." method="_on_color_selected"]
 [connection signal="pressed" from="MenuPanel/MarginContainer/SettingsMenu/Buttons/BackButton" to="." method="_on_back_pressed"]
 [connection signal="pressed" from="MenuPanel/MarginContainer/SettingsMenu/Buttons/ResetButton" to="." method="_on_reset_pressed"]
-
-

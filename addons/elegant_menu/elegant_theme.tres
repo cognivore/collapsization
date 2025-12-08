@@ -87,3 +87,4 @@ Label/colors/font_shadow_color = Color(0, 0, 0, 0.3)
 PanelContainer/styles/panel = SubResource("StyleBoxFlat_panel")
 
 
+

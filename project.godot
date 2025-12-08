@@ -17,11 +17,14 @@ config/icon="res://icon.svg"
 
 [autoload]
 
+NetworkManager="*res://addons/netcode/network_manager.gd"
+NetworkLogger="*res://addons/netcode/network_logger.gd"
+DemoLauncher="*res://addons/netcode/demo_launcher.gd"
 GameMenu="*res://addons/elegant_menu/game_menu.tscn"
 
 [editor_plugins]
 
-enabled=PackedStringArray("res://addons/elegant_menu/plugin.cfg")
+enabled=PackedStringArray("res://addons/elegant_menu/plugin.cfg", "res://addons/gut/plugin.cfg", "res://addons/netcode/plugin.cfg")
 
 [input]
 
