@@ -8,6 +8,3 @@ func _enter_tree() -> void:
 
 func _exit_tree() -> void:
 	remove_autoload_singleton("GameMenu")
-
-
-

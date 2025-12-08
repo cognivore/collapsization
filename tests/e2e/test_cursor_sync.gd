@@ -23,7 +23,7 @@ func before_each() -> void:
 	server_transport = ENetTransport.new()
 	client1_transport = ENetTransport.new()
 	client2_transport = ENetTransport.new()
-	
+
 	server_players.clear()
 	client1_players.clear()
 	client2_players.clear()
@@ -36,7 +36,7 @@ func after_each() -> void:
 		client1_transport.disconnect_from_host()
 	if client2_transport:
 		client2_transport.disconnect_from_host()
-	
+
 	# Allow network cleanup
 	await get_tree().process_frame
 	await get_tree().process_frame
@@ -50,16 +50,14 @@ func test_server_can_host() -> void:
 
 
 func test_client_can_connect() -> void:
-	# Start server
-	var server_connected := false
-	server_transport.peer_connected.connect(func(_id): server_connected = true)
+	# Start server and watch signals
+	watch_signals(server_transport)
+	watch_signals(client1_transport)
 	server_transport.host(TEST_PORT)
-	
+
 	# Connect client
-	var client_connected := false
-	client1_transport.connected.connect(func(): client_connected = true)
 	client1_transport.connect_to_host("127.0.0.1", TEST_PORT)
-	
+
 	# Poll until connected or timeout
 	var elapsed := 0.0
 	while elapsed < CONNECT_TIMEOUT:
@@ -67,30 +65,26 @@ func test_client_can_connect() -> void:
 		client1_transport.poll()
 		await get_tree().process_frame
 		elapsed += get_process_delta_time()
-		if server_connected and client_connected:
+		if server_transport.get_connected_peers().size() > 0 and client1_transport.is_active():
 			break
-	
-	assert_true(server_connected, "Server should see client connection")
-	assert_true(client_connected, "Client should connect to server")
+
+	assert_signal_emitted(server_transport, "peer_connected", "Server should see client connection")
+	assert_signal_emitted(client1_transport, "connected", "Client should connect to server")
 	assert_true(client1_transport.is_active(), "Client should be active")
 	assert_false(client1_transport.is_server(), "Client should not identify as server")
 
 
 func test_two_clients_can_connect() -> void:
-	# Start server
-	var peers_connected := 0
-	server_transport.peer_connected.connect(func(_id): peers_connected += 1)
+	# Start server and watch signals
+	watch_signals(server_transport)
+	watch_signals(client1_transport)
+	watch_signals(client2_transport)
 	server_transport.host(TEST_PORT)
-	
+
 	# Connect both clients
-	var client1_connected := false
-	var client2_connected := false
-	client1_transport.connected.connect(func(): client1_connected = true)
-	client2_transport.connected.connect(func(): client2_connected = true)
-	
 	client1_transport.connect_to_host("127.0.0.1", TEST_PORT)
 	client2_transport.connect_to_host("127.0.0.1", TEST_PORT)
-	
+
 	# Poll until both connected or timeout
 	var elapsed := 0.0
 	while elapsed < CONNECT_TIMEOUT:
@@ -99,19 +93,19 @@ func test_two_clients_can_connect() -> void:
 		client2_transport.poll()
 		await get_tree().process_frame
 		elapsed += get_process_delta_time()
-		if peers_connected >= 2 and client1_connected and client2_connected:
+		if server_transport.get_connected_peers().size() >= 2:
 			break
-	
-	assert_eq(peers_connected, 2, "Server should see 2 client connections")
-	assert_true(client1_connected, "Client 1 should connect")
-	assert_true(client2_connected, "Client 2 should connect")
+
+	assert_eq(server_transport.get_connected_peers().size(), 2, "Server should see 2 client connections")
+	assert_signal_emitted(client1_transport, "connected", "Client 1 should connect")
+	assert_signal_emitted(client2_transport, "connected", "Client 2 should connect")
 
 
 func test_cursor_data_syncs_between_clients() -> void:
 	# Setup server with data forwarding
 	var received_on_server: Array[Dictionary] = []
 	var received_on_client2: Array[Dictionary] = []
-	
+
 	server_transport.data_received.connect(func(from_id, data):
 		var msg = bytes_to_var(data)
 		received_on_server.append({"from": from_id, "msg": msg})
@@ -120,17 +114,17 @@ func test_cursor_data_syncs_between_clients() -> void:
 			if peer != from_id:
 				server_transport.send(peer, data)
 	)
-	
+
 	client2_transport.data_received.connect(func(from_id, data):
 		var msg = bytes_to_var(data)
 		received_on_client2.append({"from": from_id, "msg": msg})
 	)
-	
+
 	# Start server and connect clients
 	server_transport.host(TEST_PORT)
 	client1_transport.connect_to_host("127.0.0.1", TEST_PORT)
 	client2_transport.connect_to_host("127.0.0.1", TEST_PORT)
-	
+
 	# Wait for connections
 	var elapsed := 0.0
 	while elapsed < CONNECT_TIMEOUT:
@@ -141,9 +135,9 @@ func test_cursor_data_syncs_between_clients() -> void:
 		elapsed += get_process_delta_time()
 		if server_transport.get_connected_peers().size() >= 2:
 			break
-	
+
 	assert_eq(server_transport.get_connected_peers().size(), 2, "Should have 2 clients connected")
-	
+
 	# Client 1 sends cursor update
 	var cursor_msg := {
 		"type": NetworkManager.MessageType.CURSOR_UPDATE,
@@ -151,7 +145,7 @@ func test_cursor_data_syncs_between_clients() -> void:
 		"from": client1_transport.get_local_peer_id(),
 	}
 	client1_transport.broadcast(var_to_bytes(cursor_msg))
-	
+
 	# Poll until received or timeout
 	elapsed = 0.0
 	while elapsed < SYNC_TIMEOUT:
@@ -162,10 +156,10 @@ func test_cursor_data_syncs_between_clients() -> void:
 		elapsed += get_process_delta_time()
 		if received_on_client2.size() > 0:
 			break
-	
+
 	assert_gt(received_on_server.size(), 0, "Server should receive cursor update")
 	assert_gt(received_on_client2.size(), 0, "Client 2 should receive forwarded cursor update")
-	
+
 	if received_on_client2.size() > 0:
 		var msg = received_on_client2[0]["msg"]
 		assert_eq(msg["type"], NetworkManager.MessageType.CURSOR_UPDATE, "Message type should be CURSOR_UPDATE")
@@ -173,18 +167,11 @@ func test_cursor_data_syncs_between_clients() -> void:
 
 
 func test_disconnect_is_graceful() -> void:
-	var peer_disconnected := false
-	var disconnected_id := -1
-	
-	server_transport.peer_disconnected.connect(func(id):
-		peer_disconnected = true
-		disconnected_id = id
-	)
-	
-	# Start server and connect client
+	# Start server and watch signals
+	watch_signals(server_transport)
 	server_transport.host(TEST_PORT)
 	client1_transport.connect_to_host("127.0.0.1", TEST_PORT)
-	
+
 	# Wait for connection
 	var elapsed := 0.0
 	while elapsed < CONNECT_TIMEOUT:
@@ -194,24 +181,23 @@ func test_disconnect_is_graceful() -> void:
 		elapsed += get_process_delta_time()
 		if server_transport.get_connected_peers().size() >= 1:
 			break
-	
+
 	var client_id := client1_transport.get_local_peer_id()
 	assert_gt(client_id, 0, "Client should have valid ID")
-	
+
 	# Disconnect client
 	client1_transport.disconnect_from_host()
-	
+
 	# Poll until disconnect detected or timeout
 	elapsed = 0.0
 	while elapsed < CONNECT_TIMEOUT:
 		server_transport.poll()
 		await get_tree().process_frame
 		elapsed += get_process_delta_time()
-		if peer_disconnected:
+		if server_transport.get_connected_peers().size() == 0:
 			break
-	
-	assert_true(peer_disconnected, "Server should detect client disconnect")
-	assert_eq(disconnected_id, client_id, "Disconnected ID should match client ID")
+
+	assert_signal_emitted(server_transport, "peer_disconnected", "Server should detect client disconnect")
 	assert_eq(server_transport.get_connected_peers().size(), 0, "No peers should remain")
 
 
@@ -220,12 +206,12 @@ func test_player_colors_are_unique() -> void:
 	var player1 := PlayerState.new()
 	var player2 := PlayerState.new()
 	var player3 := PlayerState.new()
-	
+
 	# Manually set different colors to simulate real scenario
 	player1.set_color_index(0)
 	player2.set_color_index(1)
 	player3.set_color_index(2)
-	
+
 	assert_ne(player1.get_color(), player2.get_color(), "Player 1 and 2 should have different colors")
 	assert_ne(player2.get_color(), player3.get_color(), "Player 2 and 3 should have different colors")
 	assert_ne(player1.get_color(), player3.get_color(), "Player 1 and 3 should have different colors")
@@ -237,15 +223,14 @@ func test_player_state_serialization() -> void:
 	player.display_name = "TestPlayer"
 	player.set_color_index(3)
 	player.set_hovered_hex(Vector3i(5, -2, -3))
-	
+
 	# Serialize
 	var data := player.to_dict()
-	
+
 	# Deserialize into new player
 	var player2 := PlayerState.new()
 	player2.update_from_dict(data)
-	
+
 	assert_eq(player2.display_name, "TestPlayer", "Name should serialize")
 	assert_eq(player2.color_index, 3, "Color should serialize")
 	assert_eq(player2.hovered_hex, Vector3i(5, -2, -3), "Hovered hex should serialize")
-

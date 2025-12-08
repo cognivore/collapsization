@@ -10,7 +10,7 @@ signal remote_cursor_updated(player_id: int, hex: Vector3i)
 signal remote_cursor_removed(player_id: int)
 
 ## How often to send cursor updates (seconds)
-@export var sync_rate: float = 0.05  # 20 updates per second
+@export var sync_rate: float = 0.05 # 20 updates per second
 
 ## Reference to the hex tilemap layer
 @export var hex_field: HexagonTileMapLayer
@@ -23,7 +23,7 @@ func _ready() -> void:
 	# Auto-find hex field if not set
 	if hex_field == null:
 		hex_field = _find_hex_field()
-	
+
 	# Connect to NetworkManager signals
 	_connect_network_signals.call_deferred()
 
@@ -43,12 +43,12 @@ func _get_network_manager() -> Node:
 func _process(delta: float) -> void:
 	if not _is_networked():
 		return
-	
+
 	_sync_timer += delta
 	if _sync_timer >= sync_rate:
 		_sync_timer = 0.0
 		_send_cursor_update()
-	
+
 	# Update remote cursors from player states
 	_update_remote_cursors()
 
@@ -74,32 +74,32 @@ func _find_hex_field() -> HexagonTileMapLayer:
 func _send_cursor_update() -> void:
 	if hex_field == null:
 		return
-	
+
 	var net_mgr := _get_network_manager()
 	if net_mgr == null or net_mgr.local_player == null:
 		return
-	
+
 	# Get current hovered hex
 	var current_hex := _get_hovered_hex()
-	
+
 	# Only send if changed
 	if current_hex != _last_sent_hex:
 		_last_sent_hex = current_hex
 		net_mgr.local_player.hovered_hex = current_hex
-		
+
 		# Log local cursor update
 		_log_cursor_update(net_mgr.local_player.peer_id, current_hex, true)
-		
+
 		var data: Dictionary
 		if current_hex.x != 0x7FFFFFFF:
 			data = {"hex": [current_hex.x, current_hex.y, current_hex.z]}
 		else:
 			data = {"hex": null}
-		
+
 		net_mgr.broadcast_message(
 			net_mgr.MessageType.CURSOR_UPDATE,
 			data,
-			false  # Unreliable for cursor updates (high frequency)
+			false # Unreliable for cursor updates (high frequency)
 		)
 
 
@@ -111,19 +111,19 @@ func _get_hovered_hex() -> Vector3i:
 		if net_mgr and net_mgr.local_player:
 			return net_mgr.local_player.hovered_hex
 		return Vector3i(0x7FFFFFFF, 0, 0)
-	
+
 	# Normal mode: use real mouse position
 	if hex_field == null:
 		return Vector3i(0x7FFFFFFF, 0, 0)
-	
+
 	var mouse_pos := hex_field.get_local_mouse_position()
 	var hovered := hex_field.get_closest_cell_from_local(mouse_pos)
-	
+
 	# Check if hex exists in the field
 	var map_pos := hex_field.cube_to_map(hovered)
 	if hex_field.get_cell_source_id(map_pos) == -1:
 		return Vector3i(0x7FFFFFFF, 0, 0)
-	
+
 	return hovered
 
 
@@ -149,7 +149,7 @@ func _update_remote_cursors() -> void:
 	var net_mgr := _get_network_manager()
 	if net_mgr == null:
 		return
-	
+
 	for player in net_mgr.get_remote_players():
 		# Log remote cursor updates (only when hex is valid and changed)
 		if player.is_hovering():
@@ -164,14 +164,14 @@ func _on_player_left(player_id: int) -> void:
 ## Get all remote player cursors for rendering
 func get_remote_cursors() -> Array[Dictionary]:
 	var cursors: Array[Dictionary] = []
-	
+
 	if not _is_networked():
 		return cursors
-	
+
 	var net_mgr := _get_network_manager()
 	if net_mgr == null:
 		return cursors
-	
+
 	for player in net_mgr.get_remote_players():
 		if player.is_hovering():
 			cursors.append({
@@ -179,5 +179,5 @@ func get_remote_cursors() -> Array[Dictionary]:
 				"color": player.get_color(),
 				"player_id": player.peer_id,
 			})
-	
+
 	return cursors

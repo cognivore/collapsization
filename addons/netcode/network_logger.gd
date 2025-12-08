@@ -2,8 +2,8 @@
 ## Logs are written to user://logs/ directory.
 extends Node
 
-const MAX_LOG_SIZE := 1024 * 1024  # 1MB per log file
-const MAX_LOG_FILES := 5  # Keep last 5 log files
+const MAX_LOG_SIZE := 1024 * 1024 # 1MB per log file
+const MAX_LOG_FILES := 5 # Keep last 5 log files
 
 var _log_file: FileAccess
 var _log_path: String
@@ -21,24 +21,24 @@ func _setup_logging() -> void:
 	if has_node("/root/DemoLauncher"):
 		var launcher := get_node("/root/DemoLauncher")
 		match launcher.role:
-			1:  # SERVER
+			1: # SERVER
 				_instance_type = "server"
-			2:  # CLIENT
+			2: # CLIENT
 				_instance_type = "client_%d" % launcher.client_index
-	
+
 	# Create logs directory
 	var logs_dir := "user://logs"
 	if not DirAccess.dir_exists_absolute(logs_dir):
 		DirAccess.make_dir_absolute(logs_dir)
-	
+
 	# Rotate logs before opening new one
 	_rotate_logs()
-	
+
 	# Open new log file
 	var timestamp := Time.get_datetime_string_from_system().replace(":", "-")
 	_log_path = "%s/%s_%s.log" % [logs_dir, _instance_type, timestamp]
 	_log_file = FileAccess.open(_log_path, FileAccess.WRITE)
-	
+
 	if _log_file:
 		log_info("=== Log started for %s ===" % _instance_type)
 		log_info("Godot %s" % Engine.get_version_info().string)
@@ -49,7 +49,7 @@ func _rotate_logs() -> void:
 	var dir := DirAccess.open(logs_dir)
 	if dir == null:
 		return
-	
+
 	# Find all logs for this instance type
 	var log_files: Array[String] = []
 	dir.list_dir_begin()
@@ -59,10 +59,10 @@ func _rotate_logs() -> void:
 			log_files.append(logs_dir + "/" + file_name)
 		file_name = dir.get_next()
 	dir.list_dir_end()
-	
+
 	# Sort by modification time (oldest first)
 	log_files.sort()
-	
+
 	# Remove oldest files if we have too many
 	while log_files.size() >= MAX_LOG_FILES:
 		var old_file: String = log_files.pop_front()
@@ -84,13 +84,13 @@ func _get_timestamp() -> String:
 func _write_log(level: String, message: String) -> void:
 	if _log_file == null:
 		return
-	
+
 	var line := "[%s] [%s] %s\n" % [_get_timestamp(), level, message]
 	_log_file.store_string(line)
 	_log_file.flush()
-	
+
 	_current_log_size += line.length()
-	
+
 	# Check if we need to rotate
 	if _current_log_size > MAX_LOG_SIZE:
 		_log_file.close()
@@ -140,4 +140,3 @@ func log_player_left(player_id: int) -> void:
 ## Log network message
 func log_network_message(from_id: int, msg_type: int, data: Dictionary) -> void:
 	log_debug("NET_MSG from=%d type=%d data=%s" % [from_id, msg_type, str(data)])
-

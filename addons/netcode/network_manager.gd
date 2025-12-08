@@ -21,7 +21,7 @@ enum MessageType {
 const DEFAULT_PORT := 7777
 
 var transport: NetworkTransport
-var players: Dictionary[int, PlayerState] = {}  # peer_id -> PlayerState
+var players: Dictionary[int, PlayerState] = {} # peer_id -> PlayerState
 var local_player: PlayerState
 
 

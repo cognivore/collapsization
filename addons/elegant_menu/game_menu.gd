@@ -19,7 +19,7 @@ const PlayerStateScript := preload("res://addons/netcode/player_state.gd")
 @onready var edge_speed_slider: HSlider = $MenuPanel/MarginContainer/SettingsMenu/EdgeSpeed/HSlider
 @onready var edge_speed_value: Label = $MenuPanel/MarginContainer/SettingsMenu/EdgeSpeed/Value
 
-var settings: Node  # SettingsManager
+var settings: Node # SettingsManager
 var is_open := false
 
 
@@ -130,7 +130,7 @@ func _on_edge_speed_changed(value: float) -> void:
 func _on_color_selected(index: int) -> void:
 	settings.player_color_index = index
 	_update_color_preview(index)
-	
+
 	# Update local player color if networked
 	var net_mgr := _get_network_manager()
 	if net_mgr and net_mgr.local_player:
@@ -141,7 +141,7 @@ func _on_color_selected(index: int) -> void:
 			net_mgr.local_player.to_dict(),
 			true
 		)
-	
+
 	# Find hex field and update color
 	var hex_field := _find_hex_field()
 	if hex_field:

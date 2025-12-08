@@ -1,7 +1,7 @@
 [gd_scene load_steps=3 format=3 uid="uid://elegant_game_menu"]
 
 [ext_resource type="Script" path="res://addons/elegant_menu/game_menu.gd" id="1_script"]
-[ext_resource type="Theme" uid="uid://elegant_menu_theme" path="res://addons/elegant_menu/elegant_theme.tres" id="2_theme"]
+[ext_resource type="Theme" uid="uid://bav626xe3lbvn" path="res://addons/elegant_menu/elegant_theme.tres" id="2_theme"]
 
 [node name="GameMenu" type="CanvasLayer"]
 layer = 100

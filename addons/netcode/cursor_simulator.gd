@@ -3,7 +3,7 @@
 extends Node
 
 ## Movement patterns available
-enum Pattern { CIRCLE, SPIRAL, RANDOM_WALK, FIGURE_EIGHT }
+enum Pattern {CIRCLE, SPIRAL, RANDOM_WALK, FIGURE_EIGHT}
 
 ## The pattern this simulator uses
 @export var pattern := Pattern.CIRCLE
@@ -48,7 +48,7 @@ func _connect_demo_launcher() -> void:
 		var launcher := get_node("/root/DemoLauncher")
 
 		# Server is NOT a player - it just orchestrates. Only clients simulate cursors.
-		if launcher.role == 1:  # SERVER
+		if launcher.role == 1: # SERVER
 			return
 
 		launcher.demo_ready.connect(_on_demo_ready)
@@ -59,13 +59,13 @@ func _connect_demo_launcher() -> void:
 		# Client 2: RANDOM_WALK on the RIGHT side (blue)
 		if client_idx == 1:
 			pattern = Pattern.SPIRAL
-			_center_offset = Vector3i(-8, 4, 4)  # Left side of map
-			speed = 4.0  # Faster spiral
+			_center_offset = Vector3i(-8, 4, 4) # Left side of map
+			speed = 4.0 # Faster spiral
 		else:
 			pattern = Pattern.RANDOM_WALK
-			_center_offset = Vector3i(8, -4, -4)  # Right side of map
-			speed = 5.0  # Faster random walk
-			_current_hex = _center_offset  # Start at center
+			_center_offset = Vector3i(8, -4, -4) # Right side of map
+			speed = 5.0 # Faster random walk
+			_current_hex = _center_offset # Start at center
 
 		# Offset starting time so updates interleave
 		_time = client_idx * 0.5
@@ -109,13 +109,13 @@ func _calculate_circle() -> Vector3i:
 	var angle := _time * speed * 0.5
 	var x := int(round(cos(angle) * radius))
 	var y := int(round(sin(angle) * radius))
-	var z := -x - y  # Cube coordinate constraint
+	var z := -x - y # Cube coordinate constraint
 	return Vector3i(x, y, z) + _center_offset
 
 
 func _calculate_spiral() -> Vector3i:
 	var angle := _time * speed * 0.5
-	var r := fmod(_time * 0.5, float(radius)) + 2.0  # Oscillating radius
+	var r := fmod(_time * 0.5, float(radius)) + 2.0 # Oscillating radius
 	var x := int(round(cos(angle) * r))
 	var y := int(round(sin(angle) * r))
 	var z := -x - y
@@ -193,7 +193,7 @@ func _send_cursor_update(hex: Vector3i) -> void:
 	net_mgr.broadcast_message(
 		net_mgr.MessageType.CURSOR_UPDATE,
 		data,
-		false  # Unreliable for frequent updates
+		false # Unreliable for frequent updates
 	)
 
 
@@ -219,4 +219,3 @@ func _find_hex_in_tree(node: Node) -> HexagonTileMapLayer:
 		if found:
 			return found
 	return null
-

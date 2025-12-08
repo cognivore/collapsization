@@ -6,14 +6,14 @@ extends RefCounted
 ## Color palette for players - ordered for maximum contrast between adjacent indices
 ## Index 0 = server (unused), 1 = client 1, 2 = client 2, etc.
 const PLAYER_COLORS: Array[Color] = [
-	Color("#888888"),  # grey (server/unused)
-	Color("#e74c3c"),  # RED - client 1
-	Color("#4a9eff"),  # BLUE - client 2
-	Color("#5cb85c"),  # green - client 3
-	Color("#ff8c42"),  # orange - client 4
-	Color("#9b59b6"),  # purple - client 5
-	Color("#f1c40f"),  # yellow - client 6
-	Color("#1abc9c"),  # teal - client 7
+	Color("#888888"), # grey (server/unused)
+	Color("#e74c3c"), # RED - client 1
+	Color("#4a9eff"), # BLUE - client 2
+	Color("#5cb85c"), # green - client 3
+	Color("#ff8c42"), # orange - client 4
+	Color("#9b59b6"), # purple - client 5
+	Color("#f1c40f"), # yellow - client 6
+	Color("#1abc9c"), # teal - client 7
 ]
 
 ## Network peer ID
@@ -98,4 +98,3 @@ func _to_string() -> String:
 	var name_str := display_name if display_name else "Player %d" % peer_id
 	var local_str := " (local)" if is_local else ""
 	return "%s%s [color %d]" % [name_str, local_str, color_index]
-

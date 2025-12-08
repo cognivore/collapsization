@@ -2,24 +2,24 @@ extends Node
 class_name SettingsManager
 
 const SETTINGS_PATH := "user://settings.cfg"
-const TILE_WIDTH := 164.0  # pixels per tile
+const TILE_WIDTH := 164.0 # pixels per tile
 
 signal settings_changed
 
 var config := ConfigFile.new()
 
 # Camera settings in tiles/sec (converted to pixels in camera)
-var keyboard_pan_speed: float = 40.0:  # tiles/sec
+var keyboard_pan_speed: float = 40.0: # tiles/sec
 	set(v):
 		keyboard_pan_speed = v
 		settings_changed.emit()
 
-var mouse_pan_speed: float = 40.0:  # tiles/sec for drag
+var mouse_pan_speed: float = 40.0: # tiles/sec for drag
 	set(v):
 		mouse_pan_speed = v
 		settings_changed.emit()
 
-var edge_pan_speed: float = 40.0:  # tiles/sec
+var edge_pan_speed: float = 40.0: # tiles/sec
 	set(v):
 		edge_pan_speed = v
 		settings_changed.emit()

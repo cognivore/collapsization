@@ -36,6 +36,13 @@ func _ready() -> void:
 func _parse_args() -> void:
 	var args := OS.get_cmdline_args()
 
+	# Check if running tests (GUT) - skip demo mode entirely
+	for arg in args:
+		if arg == "-s" or arg.ends_with("gut_cmdln.gd"):
+			is_demo_mode = false
+			role = Role.NONE
+			return
+
 	for i in range(args.size()):
 		var arg := args[i]
 

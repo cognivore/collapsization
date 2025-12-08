@@ -1,4 +1,4 @@
-[gd_resource type="TileSet" load_steps=3 format=3 uid="uid://green_hex_tileset"]
+[gd_resource type="TileSet" load_steps=3 format=3 uid="uid://cylntgfc02l81"]
 
 [ext_resource type="Texture2D" uid="uid://bay24yvwkqxim" path="res://addons/hexagon_tilemaplayer/demo/tile_horizontal.png" id="1_tex"]
 
@@ -18,7 +18,3 @@ resource_name = "GreenGradient"
 tile_shape = 3
 tile_size = Vector2i(164, 190)
 sources/1 = SubResource("TileSetAtlasSource_green")
-
-
-
-

@@ -1,16 +1,16 @@
 extends Camera2D
 
-const TILE_WIDTH := 164.0  # pixels per tile
-const TILE_HEIGHT := 190.0  # pixels per tile (hex height)
+const TILE_WIDTH := 164.0 # pixels per tile
+const TILE_HEIGHT := 190.0 # pixels per tile (hex height)
 
 @export var zoom_min: float = 0.25
 @export var zoom_max: float = 4.0
 @export var zoom_step: float = 0.1
 
 # Pan settings in tiles/sec (synced from GameMenu settings)
-var keyboard_pan_speed: float = 40.0  # tiles/sec
-var mouse_pan_speed: float = 40.0  # tiles/sec
-var edge_pan_speed: float = 40.0  # tiles/sec
+var keyboard_pan_speed: float = 40.0 # tiles/sec
+var mouse_pan_speed: float = 40.0 # tiles/sec
+var edge_pan_speed: float = 40.0 # tiles/sec
 var edge_pan_margin: float = 20.0
 
 var dragging := false
@@ -19,7 +19,7 @@ var drag_mouse_start := Vector2.ZERO
 
 # For demo mode: track last cursor event to follow
 var _last_event_hex: Vector3i = Vector3i(0x7FFFFFFF, 0, 0)
-var _follow_speed := 5.0  # Smoothing for camera follow
+var _follow_speed := 5.0 # Smoothing for camera follow
 
 
 func _ready() -> void:
@@ -96,7 +96,7 @@ func _process(dt: float) -> void:
 
 ## Tracks which player's cursor we're following and their last hex
 var _followed_player_id: int = 0
-var _player_last_hex: Dictionary = {}  # player_id -> last known hex
+var _player_last_hex: Dictionary = {} # player_id -> last known hex
 
 func _handle_demo_follow(dt: float) -> void:
 	var net_mgr := _get_network_manager()
@@ -154,7 +154,7 @@ func _handle_drag() -> void:
 	if dragging:
 		var mouse_delta := get_global_mouse_position() - drag_mouse_start
 		# Convert tiles/sec to pixels for drag sensitivity
-		var speed_px := mouse_pan_speed * TILE_WIDTH / 40.0  # normalize so 40 t/s = 1x
+		var speed_px := mouse_pan_speed * TILE_WIDTH / 40.0 # normalize so 40 t/s = 1x
 		global_position = drag_cam_start - mouse_delta * speed_px / zoom
 
 

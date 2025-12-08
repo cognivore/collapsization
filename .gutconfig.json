@@ -1,5 +1,7 @@
 {
-    "dirs": ["res://tests/"],
+    "dirs": [
+        "res://tests/"
+    ],
     "double_strategy": "SCRIPT_ONLY",
     "include_subdirs": true,
     "inner_class": "",

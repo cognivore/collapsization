@@ -19,7 +19,7 @@ var _local_glow: Polygon2D
 var _remote_highlights: Dictionary = {}
 
 # Reference to cursor sync (set externally or found automatically)
-var cursor_sync: Node  # CursorSync
+var cursor_sync: Node # CursorSync
 
 
 func _ready() -> void:
@@ -213,7 +213,7 @@ func _create_remote_highlight(player_id: int) -> void:
 	outline.width = OUTLINE_WIDTH
 	outline.default_color = player_color
 	outline.closed = true
-	outline.z_index = 9  # Slightly below local player
+	outline.z_index = 9 # Slightly below local player
 	outline.visible = false
 	add_child(outline)
 

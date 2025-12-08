@@ -124,7 +124,7 @@ func poll() -> void:
 			MultiplayerPeer.CONNECTION_CONNECTED:
 				if _connected_peers.is_empty():
 					# Just connected to server
-					_connected_peers.append(1)  # Server is always peer 1
+					_connected_peers.append(1) # Server is always peer 1
 					connected.emit()
 			MultiplayerPeer.CONNECTION_DISCONNECTED:
 				if not _connected_peers.is_empty():
