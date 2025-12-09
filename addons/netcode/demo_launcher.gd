@@ -1,31 +1,37 @@
-## Autoload that handles demo mode: spawns client windows and auto-connects.
-## Parses command-line args to determine role (server/client).
+## Autoload that handles demo/singleplayer mode: spawns bot clients that auto-play.
+## Human plays as Mayor, 2 headless bot processes play as Industry and Urbanist advisors.
 extends Node
+
+const GameRules := preload("res://scripts/game_rules.gd")
 
 signal demo_ready
 
-## Whether we're running in demo/debug mode
-var is_demo_mode := false
+# ─────────────────────────────────────────────────────────────────────────────
+# ENUMS & CONSTANTS
+# ─────────────────────────────────────────────────────────────────────────────
 
-## Role for this instance
-enum Role { NONE, SERVER, CLIENT }
+enum Role {NONE, SERVER, CLIENT, BOT}
+
+const PORT := 7779
+const SPAWN_DELAY := 0.3
+const DEMO_SEED := 42
+const REQUIRED_PLAYERS := 3
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STATE
+# ─────────────────────────────────────────────────────────────────────────────
+
 var role := Role.NONE
-
-## Client index (for color assignment)
 var client_index := 0
+var is_bot := false
+var is_demo_mode := true
+var is_singleplayer := true
 
-## Number of client windows to spawn
-@export var num_clients := 2
-
-## Port for networking
-const PORT := 7777
-
-## Delay before spawning clients (let server start)
-const SPAWN_DELAY := 0.5
-
-## Spawned process IDs (to clean up on exit)
 var _spawned_pids: Array[int] = []
 
+# ─────────────────────────────────────────────────────────────────────────────
+# LIFECYCLE
+# ─────────────────────────────────────────────────────────────────────────────
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -36,33 +42,29 @@ func _ready() -> void:
 func _parse_args() -> void:
 	var args := OS.get_cmdline_args()
 
-	# Check if running tests (GUT) - skip demo mode entirely
+	# Skip if running tests
 	for arg in args:
 		if arg == "-s" or arg.ends_with("gut_cmdln.gd"):
-			is_demo_mode = false
 			role = Role.NONE
 			return
 
 	for i in range(args.size()):
 		var arg := args[i]
 
-		if arg == "--demo" or arg == "--debug":
-			is_demo_mode = true
-			role = Role.SERVER  # Default to server in demo mode
-
-		elif arg == "--server":
+		if arg == "--server":
 			role = Role.SERVER
-
 		elif arg == "--client":
 			role = Role.CLIENT
-			is_demo_mode = true  # Clients spawned for demo are also in demo mode
-			# Check for client index
+			if i + 1 < args.size() and args[i + 1].is_valid_int():
+				client_index = args[i + 1].to_int()
+		elif arg == "--bot":
+			role = Role.BOT
+			is_bot = true
 			if i + 1 < args.size() and args[i + 1].is_valid_int():
 				client_index = args[i + 1].to_int()
 
-	# If no args, default to demo mode
+	# Default: start as server (singleplayer host)
 	if role == Role.NONE:
-		is_demo_mode = true
 		role = Role.SERVER
 
 
@@ -77,80 +79,183 @@ func _start_role() -> void:
 			_start_server(net_mgr)
 		Role.CLIENT:
 			_start_client(net_mgr)
+		Role.BOT:
+			_start_bot(net_mgr)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# SERVER (Human Mayor)
+# ─────────────────────────────────────────────────────────────────────────────
 
 func _start_server(net_mgr: Node) -> void:
-	print("DemoLauncher: Starting as SERVER (demo_mode=%s)" % is_demo_mode)
+	print("DemoLauncher: Starting SERVER (Human Mayor)")
 
 	var err: Error = net_mgr.host_server(PORT)
 	if err != OK:
 		push_error("DemoLauncher: Failed to start server: %s" % error_string(err))
 		return
 
-	# Set server's color to index 0
 	if net_mgr.local_player:
 		net_mgr.local_player.set_color_index(0)
 
-	# In demo mode, spawn client windows
-	if is_demo_mode:
-		await get_tree().create_timer(SPAWN_DELAY).timeout
-		_spawn_clients()
+	# Configure game manager
+	var gm := _get_game_manager()
+	if gm:
+		gm.game_seed = DEMO_SEED
+		net_mgr.player_joined.connect(_on_player_joined_server)
+
+	# Spawn bot clients
+	await get_tree().create_timer(SPAWN_DELAY).timeout
+	_spawn_bots()
 
 	demo_ready.emit()
 
 
-func _start_client(net_mgr: Node) -> void:
-	print("DemoLauncher: Starting as CLIENT (index=%d)" % client_index)
+func _on_player_joined_server(peer_id: int) -> void:
+	var net_mgr := _get_network_manager()
+	var gm := _get_game_manager()
+	if net_mgr == null or gm == null:
+		return
 
-	# Connect signals for when we successfully connect
-	net_mgr.connected_to_server.connect(_on_connected_to_server)
+	var player_count: int = net_mgr.players.size()
+	print("DemoLauncher: Player %d joined (%d/%d)" % [peer_id, player_count, REQUIRED_PLAYERS])
+
+	# Start game when all players joined and still in LOBBY
+	if player_count >= REQUIRED_PLAYERS and gm.phase == 0: # LOBBY
+		print("DemoLauncher: All players joined! Starting game...")
+		await get_tree().create_timer(0.5).timeout
+		_start_game()
+
+
+func _start_game() -> void:
+	var gm := _get_game_manager()
+	var hex_field := _get_hex_field()
+
+	if hex_field and hex_field.has_method("reinit_map_layers"):
+		hex_field.reinit_map_layers(DEMO_SEED)
+
+	if gm:
+		gm.start_game()
+		print("DemoLauncher: Game started!")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CLIENT (Manual testing)
+# ─────────────────────────────────────────────────────────────────────────────
+
+func _start_client(net_mgr: Node) -> void:
+	print("DemoLauncher: Starting CLIENT (index=%d)" % client_index)
+	net_mgr.connected_to_server.connect(_on_connected_as_client)
 
 	var err: Error = net_mgr.join_server("127.0.0.1", PORT)
 	if err != OK:
 		push_error("DemoLauncher: Failed to join server: %s" % error_string(err))
-		return
 
 
-func _on_connected_to_server() -> void:
+func _on_connected_as_client() -> void:
 	var net_mgr := _get_network_manager()
 	if net_mgr and net_mgr.local_player:
-		# Set color based on client index (palette: 1=RED, 2=BLUE)
 		net_mgr.local_player.set_color_index(client_index)
+		net_mgr.broadcast_message(net_mgr.MessageType.PLAYER_STATE, net_mgr.local_player.to_dict(), true)
+	demo_ready.emit()
 
-		# Broadcast our state to others
-		net_mgr.broadcast_message(
-			net_mgr.MessageType.PLAYER_STATE,
-			net_mgr.local_player.to_dict(),
-			true
-		)
+# ─────────────────────────────────────────────────────────────────────────────
+# BOT (Automated Advisor)
+# ─────────────────────────────────────────────────────────────────────────────
+
+func _start_bot(net_mgr: Node) -> void:
+	print("DemoLauncher: Starting BOT (index=%d)" % client_index)
+	net_mgr.connected_to_server.connect(_on_connected_as_bot)
+
+	var err: Error = net_mgr.join_server("127.0.0.1", PORT)
+	if err != OK:
+		push_error("DemoLauncher: Failed to join server as bot: %s" % error_string(err))
+
+
+func _on_connected_as_bot() -> void:
+	var net_mgr := _get_network_manager()
+	if net_mgr and net_mgr.local_player:
+		net_mgr.local_player.set_color_index(client_index)
+		net_mgr.local_player.display_name = "Bot %d" % client_index
+		net_mgr.broadcast_message(net_mgr.MessageType.PLAYER_STATE, net_mgr.local_player.to_dict(), true)
+
+	print("DemoLauncher: Bot %d connected, setting up automation" % client_index)
+
+	# Connect to phase changes
+	var gm := _get_game_manager()
+	if gm:
+		gm.phase_changed.connect(_on_bot_phase_changed)
 
 	demo_ready.emit()
 
 
-func _spawn_clients() -> void:
+func _on_bot_phase_changed(phase: int) -> void:
+	var gm := _get_game_manager()
+	if gm == null:
+		return
+
+	# Small delay for network sync
+	await get_tree().create_timer(0.3).timeout
+
+	# Only act in NOMINATE phase (bots are advisors)
+	# Phase: 0=LOBBY, 1=DRAW, 2=NOMINATE, 3=PLACE, 4=GAME_OVER
+	if phase == 2: # NOMINATE
+		_bot_commit_nomination(gm)
+
+
+func _bot_commit_nomination(gm: Node) -> void:
+	var my_role: int = gm.local_role
+	print("DemoLauncher: Bot trying to commit, role=%d, visibility=%d items" % [my_role, gm.advisor_visibility.size()])
+
+	# Only advisors commit nominations (role 1=INDUSTRY, 2=URBANIST)
+	if my_role != 1 and my_role != 2:
+		print("DemoLauncher: Bot role %d is not an advisor, skipping" % my_role)
+		return
+
+	# Pick best hex based on visibility - or fallback to adjacent
+	var best_hex: Vector3i = GameRules.pick_bot_nomination(
+		gm.advisor_visibility,
+		gm.town_center,
+		true # prefer high value
+	)
+
+	var role_name := "Industry" if my_role == 1 else "Urbanist"
+	if best_hex != GameRules.INVALID_HEX:
+		print("DemoLauncher: Bot %s committing hex (%d,%d,%d)" % [role_name, best_hex.x, best_hex.y, best_hex.z])
+		gm.commit_nomination(my_role, best_hex)
+	else:
+		# Fallback: just pick first adjacent hex
+		var fallback: Vector3i = gm.town_center + Vector3i(1, -1, 0)
+		print("DemoLauncher: Bot %s using fallback hex (%d,%d,%d)" % [role_name, fallback.x, fallback.y, fallback.z])
+		gm.commit_nomination(my_role, fallback)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BOT SPAWNING
+# ─────────────────────────────────────────────────────────────────────────────
+
+func _spawn_bots() -> void:
 	var exe_path := OS.get_executable_path()
 	var project_path := ProjectSettings.globalize_path("res://")
 
-	for i in range(num_clients):
+	# Spawn 2 bots (Industry=1, Urbanist=2)
+	for i in range(2):
+		var bot_index := i + 1
 		var args: Array[String] = [
 			"--path", project_path,
-			"--client", str(i + 1),  # Client indices start at 1
+			"--bot", str(bot_index),
+			"--headless",
 		]
 
-		# Position windows side by side
-		var window_x := 100 + (i + 1) * 420
-		var window_y := 100
-		args.append_array(["--position", "%d,%d" % [window_x, window_y]])
-
-		print("DemoLauncher: Spawning client %d with args: %s" % [i + 1, args])
+		print("DemoLauncher: Spawning bot %d" % bot_index)
 
 		var pid := OS.create_process(exe_path, args)
 		if pid > 0:
 			_spawned_pids.append(pid)
-			print("DemoLauncher: Spawned client %d (PID: %d)" % [i + 1, pid])
+			print("DemoLauncher: Spawned bot %d (PID: %d)" % [bot_index, pid])
 		else:
-			push_error("DemoLauncher: Failed to spawn client %d" % [i + 1])
+			push_error("DemoLauncher: Failed to spawn bot %d" % bot_index)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
 
 func _get_network_manager() -> Node:
 	if has_node("/root/NetworkManager"):
@@ -158,10 +263,21 @@ func _get_network_manager() -> Node:
 	return null
 
 
+func _get_game_manager() -> Node:
+	if get_tree().current_scene and get_tree().current_scene.has_node("GameManager"):
+		return get_tree().current_scene.get_node("GameManager")
+	return null
+
+
+func _get_hex_field() -> Node:
+	if get_tree().current_scene and get_tree().current_scene.has_node("HexField"):
+		return get_tree().current_scene.get_node("HexField")
+	return null
+
+
 func _exit_tree() -> void:
-	# Clean up spawned processes when server exits
+	# Clean up spawned bots when server exits
 	if role == Role.SERVER:
 		for pid in _spawned_pids:
 			OS.kill(pid)
 		_spawned_pids.clear()
-

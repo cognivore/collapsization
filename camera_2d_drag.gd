@@ -26,14 +26,34 @@ func _ready() -> void:
 	make_current()
 	_setup_mouse_mode()
 	_connect_to_settings.call_deferred()
+	# Start at center tile position - set directly
+	global_position = Vector2.ZERO
+	zoom = Vector2(1.0, 1.0)
+	print("Camera: Initialized at origin, zoom 1.0")
+
+	# Diagnostic logging for viewport/camera sanity
+	call_deferred("_log_camera_info")
+
+
+func _log_camera_info() -> void:
+	var viewport := get_viewport()
+	print("=== Camera/Viewport Diagnostics ===")
+	print("  Viewport visible rect: %s" % viewport.get_visible_rect())
+	print("  Window size: %s" % DisplayServer.window_get_size())
+	print("  Camera position: %s" % global_position)
+	print("  Camera zoom: %s" % zoom)
+	print("  Is current: %s" % is_current())
+	print("  Mouse mode: %d (0=visible, 1=hidden, 2=captured, 3=confined)" % Input.mouse_mode)
+
+	# Calculate where center hex (0,0,0) maps to screen
+	var world_pos := Vector2.ZERO  # Center hex
+	var screen_pos := get_viewport().get_canvas_transform() * world_pos
+	print("  Center hex (0,0,0) world: %s -> screen: %s" % [world_pos, screen_pos])
 
 
 func _setup_mouse_mode() -> void:
-	# In demo/debug mode, don't capture mouse
-	if _is_demo_mode():
-		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-	else:
-		Input.mouse_mode = Input.MOUSE_MODE_CONFINED
+	# Never capture mouse - always visible
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
 func _is_demo_mode() -> bool:
@@ -60,6 +80,9 @@ func _sync_settings(settings: Node) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	# Debug: Log ALL mouse button events
+	if event is InputEventMouseButton:
+		print("Camera: MouseButton event: button=%d, pressed=%s" % [event.button_index, event.pressed])
 	if event is InputEventMouseButton:
 		# Middle mouse to drag
 		if event.button_index == MOUSE_BUTTON_MIDDLE:
@@ -80,18 +103,36 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMagnifyGesture:
 		_apply_zoom(1.0 / event.factor)
 
+	# SPACEBAR: Reset camera to center
+	if event is InputEventKey and event.pressed and event.keycode == KEY_SPACE:
+		_reset_view()
+
+
+func _reset_view() -> void:
+	# Center the camera at origin and zoom out to see the whole field
+	global_position = Vector2.ZERO
+	zoom = Vector2(1.0, 1.0)
+	print("Camera: Reset to origin, zoom 1.0")
+
 
 func _process(dt: float) -> void:
 	if get_tree().paused:
 		return
 
-	# In demo mode as server: follow cursor events
-	if _is_demo_mode() and _is_server():
+	# In multiplayer demo mode as server: follow cursor events
+	# In single-player mode: use regular controls
+	if _is_demo_mode() and _is_server() and not _is_singleplayer():
 		_handle_demo_follow(dt)
 	else:
 		_handle_drag()
 		_handle_edge_pan(dt)
 		_handle_arrow_pan(dt)
+
+
+func _is_singleplayer() -> bool:
+	if has_node("/root/DemoLauncher"):
+		return get_node("/root/DemoLauncher").is_singleplayer
+	return false
 
 
 ## Tracks which player's cursor we're following and their last hex

@@ -9,11 +9,18 @@ const OUTLINE_WIDTH := 6.0
 const GLOW_ALPHA := 0.45
 const INVALID_HEX := Vector3i(0x7FFFFFFF, 0, 0)
 
+signal hex_clicked(cube: Vector3i)
+
 const PlayerStateScript := preload("res://addons/netcode/player_state.gd")
+const MapLayers := preload("res://scripts/map_layers.gd")
+
+# Preload hover shader
+var _hover_shader: Shader = preload("res://shaders/hex_hover.gdshader")
 
 var _hovered_hex: Vector3i = INVALID_HEX
 var _local_outline: Line2D
 var _local_glow: Polygon2D
+var _hover_material: ShaderMaterial
 
 # Remote player cursors: player_id -> {outline: Line2D, glow: Polygon2D}
 var _remote_highlights: Dictionary = {}
@@ -21,14 +28,58 @@ var _remote_highlights: Dictionary = {}
 # Reference to cursor sync (set externally or found automatically)
 var cursor_sync: Node # CursorSync
 
+# Reference to GameManager for click routing
+@export var game_manager_path: NodePath = NodePath("../GameManager")
+var _game_manager: Node
+
+# Advisor visibility overlays
+var _visibility_nodes: Array[Node] = []
+
+# Layered map info (truth and advisor slices)
+var map_layers: MapLayers
+
+# Fog of war: cube -> Polygon2D
+var _fog: Dictionary = {}
+
+# Nomination overlays: role_key -> {cube, outline, glow, label}
+var _nomination_overlays: Dictionary = {}
+
+# Built tiles: cube -> {outline, label}
+var _built_overlays: Dictionary = {}
+
+# Selected hex overlay
+var _selected_overlay: Dictionary = {}
+
+# Colors for different roles
+const NOMINATION_COLORS := {
+	"industry": Color(0.95, 0.7, 0.2, 0.9), # Gold
+	"urbanist": Color(0.9, 0.2, 0.3, 0.9), # Red
+}
+
+const BUILT_COLOR := Color(0.3, 0.8, 0.4, 0.9) # Green
+
 
 func _ready() -> void:
 	super._ready()
 	if Engine.is_editor_hint():
 		return
 	generate_field()
+	_init_map_layers()
+	_bind_game_manager()
+	_build_fog()
+	_reveal_initial_fog()
 	_setup_local_highlight()
 	_find_cursor_sync.call_deferred()
+
+
+func _reveal_initial_fog() -> void:
+	# Always reveal center + 1 ring at start
+	var center := Vector3i.ZERO
+	var initial_visible: Array = [center]
+	for cube in cube_ring(center, 1):
+		initial_visible.append(cube)
+	reveal_fog(initial_visible)
+	print("HexField: Revealed initial fog for %d hexes" % initial_visible.size())
 
 
 func _find_cursor_sync() -> void:
@@ -47,18 +98,28 @@ func _find_cursor_sync() -> void:
 
 
 func _setup_local_highlight() -> void:
-	var local_color := _get_local_player_color()
+	# Use white color for hover highlighting per user request
+	var hover_color := Color.WHITE
 
 	_local_outline = Line2D.new()
 	_local_outline.width = OUTLINE_WIDTH
-	_local_outline.default_color = local_color
+	_local_outline.default_color = hover_color
 	_local_outline.closed = true
 	_local_outline.z_index = 10
 	_local_outline.visible = false
 	add_child(_local_outline)
 
+	# Create shader material for radiant glow effect
+	_hover_material = ShaderMaterial.new()
+	_hover_material.shader = _hover_shader
+	_hover_material.set_shader_parameter("base_color", Color(1.0, 1.0, 1.0, 0.5))
+	_hover_material.set_shader_parameter("intensity", 1.2)
+	_hover_material.set_shader_parameter("pulse_speed", 3.0)
+	_hover_material.set_shader_parameter("edge_glow", 0.7)
+
 	_local_glow = Polygon2D.new()
-	_local_glow.color = Color(local_color, GLOW_ALPHA)
+	_local_glow.color = Color.WHITE # Base color, shader handles the effect
+	_local_glow.material = _hover_material
 	_local_glow.z_index = 5
 	_local_glow.visible = false
 	add_child(_local_glow)
@@ -78,28 +139,33 @@ func _get_network_manager() -> Node:
 	return null
 
 
+func _bind_game_manager() -> void:
+	if game_manager_path != NodePath():
+		_game_manager = get_node_or_null(game_manager_path)
+
+
+func apply_fog(fog: Array) -> void:
+	if fog.is_empty():
+		return
+	reveal_fog(fog)
+
+
 func _process(_delta: float) -> void:
 	if Engine.is_editor_hint():
 		return
 
 	var hovered: Vector3i
 
-	# In demo mode, use simulated cursor from local player state
-	if _is_demo_mode():
-		# Server has no local cursor - it only watches clients
-		if _is_server():
-			hovered = INVALID_HEX
-		else:
-			# Client: read cursor from local player state (set by CursorSimulator)
-			var net_mgr := _get_network_manager()
-			if net_mgr and net_mgr.local_player:
-				hovered = net_mgr.local_player.hovered_hex
-			else:
-				hovered = INVALID_HEX
-	else:
-		# Normal mode: use real mouse
-		var mouse_pos := get_local_mouse_position()
-		hovered = get_closest_cell_from_local(mouse_pos)
+	# Always use real mouse position for hover detection in single player
+	# The get_local_mouse_position() handles camera transforms correctly
+	var mouse_pos := get_local_mouse_position()
+	hovered = get_closest_cell_from_local(mouse_pos)
+
+	# Debug: print hover info every 2 seconds
+	if Engine.get_process_frames() % 120 == 0:
+		var map_pos := cube_to_map(hovered) if hovered != INVALID_HEX else Vector2i(-1, -1)
+		var source_id := get_cell_source_id(map_pos) if hovered != INVALID_HEX else -1
+		print("HexField: mouse_local=%s -> cube=%s, map=%s, source=%d" % [mouse_pos, hovered, map_pos, source_id])
 
 	# Check if hex exists in our field
 	if hovered != INVALID_HEX:
@@ -116,10 +182,132 @@ func _process(_delta: float) -> void:
 		_update_local_highlight(hovered)
 
 
+## Handle hex clicks only in _unhandled_input so HUD controls get priority.
+## Previously both _input and _unhandled_input handled clicks, causing duplicates.
+func _unhandled_input(event: InputEvent) -> void:
+	if Engine.is_editor_hint():
+		return
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		print("HexField: _unhandled_input MouseButton LEFT pressed=%s" % event.is_pressed())
+		if event.is_pressed():
+			_handle_hex_click()
+
+
+## Public method for external click handling - called by GameHud when click
+## is outside HUD area (bypasses broken CanvasLayer event propagation)
+func handle_external_click() -> void:
+	print("HexField: handle_external_click called")
+	_handle_hex_click()
+
+
+func _handle_hex_click() -> void:
+	var viewport_pos := get_viewport().get_mouse_position()
+	var cam := get_viewport().get_camera_2d()
+	var global_mouse: Vector2 = cam.get_global_mouse_position() if cam else get_global_mouse_position()
+	var mouse_pos := to_local(global_mouse)
+	var cube := get_closest_cell_from_local(mouse_pos)
+	var is_fogged: bool = false
+	if _fog.has(cube):
+		var poly: Polygon2D = _fog[cube] as Polygon2D
+		if poly != null:
+			is_fogged = poly.visible
+
+	print("=== HexField Click ===")
+	print("  Viewport mouse: %s" % viewport_pos)
+	print("  Local mouse: %s" % mouse_pos)
+	print("  Cube: %s" % cube)
+	print("  Fogged: %s" % is_fogged)
+	print("  Source ID: %d" % get_cell_source_id(cube_to_map(cube)))
+
+	# Draw a debug marker at the clicked location
+	_draw_click_marker(mouse_pos)
+
+	if cube != INVALID_HEX and get_cell_source_id(cube_to_map(cube)) != -1:
+		print("HexField: Emitting hex_clicked for cube (%d,%d,%d)" % [cube.x, cube.y, cube.z])
+		if _game_manager and _game_manager.has_method("on_hex_clicked"):
+			_game_manager.on_hex_clicked(cube)
+		hex_clicked.emit(cube)
+	else:
+		print("HexField: Invalid hex or outside field")
+
+
+var _click_marker: Polygon2D = null
+
+func _draw_click_marker(local_pos: Vector2) -> void:
+	# Create a small red circle at the click location for debugging
+	if _click_marker == null:
+		_click_marker = Polygon2D.new()
+		_click_marker.z_index = 100
+		add_child(_click_marker)
+
+	# Small circle of radius 8
+	var points: PackedVector2Array = []
+	for i in range(12):
+		var angle := i * TAU / 12.0
+		points.append(local_pos + Vector2(8, 0).rotated(angle))
+	_click_marker.polygon = points
+	_click_marker.color = Color.RED
+	_click_marker.visible = true
+
+	# Hide after 0.5 seconds
+	var tween := create_tween()
+	tween.tween_property(_click_marker, "modulate:a", 0.0, 0.5)
+	tween.tween_callback(func(): _click_marker.visible = false)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SELECTED HEX OVERLAY
+# ─────────────────────────────────────────────────────────────────────────────
+
+func show_selected_hex(cube: Vector3i) -> void:
+	_clear_selected_hex()
+	if cube == INVALID_HEX:
+		return
+	var outlines := cube_outlines([cube])
+	if outlines.is_empty():
+		return
+	var points: Array[Vector2] = []
+	for p in outlines[0]:
+		points.append(p)
+
+	var color := Color(0.2, 0.7, 1.0, 0.9)
+
+	var outline := Line2D.new()
+	outline.width = OUTLINE_WIDTH * 1.4
+	outline.default_color = color
+	outline.closed = true
+	outline.z_index = 18
+	for p in points:
+		outline.add_point(p)
+	add_child(outline)
+
+	var glow := Polygon2D.new()
+	glow.color = Color(color, 0.25)
+	glow.z_index = 17
+	glow.polygon = PackedVector2Array(points)
+	add_child(glow)
+
+	_selected_overlay = {"outline": outline, "glow": glow, "cube": cube}
+
+
+func _clear_selected_hex() -> void:
+	if _selected_overlay.has("outline"):
+		_selected_overlay["outline"].queue_free()
+	if _selected_overlay.has("glow"):
+		_selected_overlay["glow"].queue_free()
+	_selected_overlay.clear()
+
+
 func _is_demo_mode() -> bool:
 	if has_node("/root/DemoLauncher"):
 		return get_node("/root/DemoLauncher").is_demo_mode
 	return false
+
+
+func _is_singleplayer() -> bool:
+	if has_node("/root/DemoLauncher"):
+		return get_node("/root/DemoLauncher").is_singleplayer
+	return true # Default to singleplayer if no launcher
 
 
 func _is_server() -> bool:
@@ -145,10 +333,8 @@ func _update_local_highlight(hex: Vector3i) -> void:
 	for point in outlines[0]:
 		points.append(point)
 
-	# Update local player color in case it changed
-	var local_color := _get_local_player_color()
-	_local_outline.default_color = local_color
-	_local_glow.color = Color(local_color, GLOW_ALPHA)
+	# Use white for hover highlighting
+	_local_outline.default_color = Color.WHITE
 
 	_local_outline.clear_points()
 	for point in points:
@@ -157,6 +343,10 @@ func _update_local_highlight(hex: Vector3i) -> void:
 
 	_local_glow.polygon = PackedVector2Array(points)
 	_local_glow.visible = true
+
+	# Ensure shader is enabled
+	if _hover_material:
+		_hover_material.set_shader_parameter("enabled", true)
 
 
 func _on_remote_cursor_updated(player_id: int, hex: Vector3i) -> void:
@@ -267,7 +457,292 @@ func set_local_color_index(color_index: int) -> void:
 func generate_field() -> void:
 	clear()
 	var hexes := cube_range(Vector3i.ZERO, FIELD_RADIUS)
+	print("HexField: Generating %d hexes" % hexes.size())
 	for cube in hexes:
 		var color_index := posmod(cube.x - cube.y, 3)
 		var map_pos := cube_to_map(cube)
 		set_cell(map_pos, SOURCE_ID, ATLAS_COORDS, color_index)
+	print("HexField: Field generated, used_cells=%d" % get_used_cells().size())
+
+	# Debug: Verify center tile exists
+	var center_map := cube_to_map(Vector3i.ZERO)
+	var center_source := get_cell_source_id(center_map)
+	print("HexField: Center tile at map=%s, source_id=%d" % [center_map, center_source])
+	print("HexField: TileMapLayer visible=%s, z_index=%d" % [visible, z_index])
+
+
+func _build_fog() -> void:
+	# Create a dark overlay for each hex; turned off when revealed
+	for node in _fog.values():
+		if node:
+			node.queue_free()
+	_fog.clear()
+
+	var hexes := cube_range(Vector3i.ZERO, FIELD_RADIUS)
+	for cube in hexes:
+		var outlines := cube_outlines([cube])
+		if outlines.is_empty():
+			continue
+		var points: Array[Vector2] = []
+		for point in outlines[0]:
+			points.append(point)
+		var poly := Polygon2D.new()
+		poly.color = Color(0, 0, 0, 0.65)
+		poly.polygon = PackedVector2Array(points)
+		poly.z_index = 20
+		add_child(poly)
+		_fog[cube] = poly
+
+
+func reveal_fog(cubes: Array) -> void:
+	print("HexField: Revealing fog for %d cubes, fog dict size=%d" % [cubes.size(), _fog.size()])
+	var revealed := 0
+	for cube in cubes:
+		var key: Vector3i = cube if cube is Vector3i else Vector3i(cube[0], cube[1], cube[2])
+		if key in _fog:
+			_fog[key].visible = false
+			revealed += 1
+		else:
+			print("HexField: Cube %s not in fog dict" % str(key))
+	print("HexField: Revealed %d fog polygons" % revealed)
+
+
+func show_visibility(entries: Array) -> void:
+	_clear_visibility()
+	if entries.is_empty():
+		return
+	for entry in entries:
+		if not entry.has("cube"):
+			continue
+		var cube_arr: Array = entry["cube"]
+		if cube_arr.size() != 3:
+			continue
+		var cube := Vector3i(cube_arr[0], cube_arr[1], cube_arr[2])
+		# Reveal fog for visible cubes even if no card info
+		reveal_fog([cube])
+
+		if not entry.has("card"):
+			continue
+		var map_pos := cube_to_map(cube)
+		if get_cell_source_id(map_pos) == -1:
+			continue
+		var outlines := cube_outlines([cube])
+		if outlines.is_empty():
+			continue
+		var points: Array[Vector2] = []
+		for point in outlines[0]:
+			points.append(point)
+
+		var color := _color_for_card(entry["card"])
+
+		var outline := Line2D.new()
+		outline.width = OUTLINE_WIDTH * 0.6
+		outline.default_color = color
+		outline.closed = true
+		outline.z_index = 8
+		for point in points:
+			outline.add_point(point)
+		add_child(outline)
+
+		var glow := Polygon2D.new()
+		glow.color = Color(color, GLOW_ALPHA * 0.8)
+		glow.z_index = 3
+		glow.polygon = PackedVector2Array(points)
+		add_child(glow)
+
+		_visibility_nodes.append(outline)
+		_visibility_nodes.append(glow)
+
+
+func _clear_visibility() -> void:
+	for node in _visibility_nodes:
+		if node:
+			node.queue_free()
+	_visibility_nodes.clear()
+
+
+func _color_for_card(card: Dictionary) -> Color:
+	match card.get("suit", -1):
+		MapLayers.Suit.HEARTS:
+			return Color("#e74c3c")
+		MapLayers.Suit.DIAMONDS:
+			return Color("#f39c12")
+		MapLayers.Suit.SPADES:
+			return Color("#2c3e50")
+		_:
+			return PlayerStateScript.PLAYER_COLORS[0]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NOMINATION OVERLAYS
+# ─────────────────────────────────────────────────────────────────────────────
+
+## Show nominated hexes on the map (called when nominations are revealed)
+func show_nominations(nominations: Dictionary) -> void:
+	_clear_nominations()
+
+	for role_key in nominations.keys():
+		var cube: Vector3i = nominations[role_key]
+		if cube == INVALID_HEX:
+			continue
+
+		var color: Color = NOMINATION_COLORS.get(role_key, Color.WHITE)
+		_create_nomination_overlay(role_key, cube, color)
+
+	print("HexField: Showing %d nominations" % _nomination_overlays.size())
+
+
+func _create_nomination_overlay(role_key: String, cube: Vector3i, color: Color) -> void:
+	var outlines := cube_outlines([cube])
+	if outlines.is_empty():
+		return
+
+	var points: Array[Vector2] = []
+	for point in outlines[0]:
+		points.append(point)
+
+	# Create thick outline - lower z_index so hover highlight is above
+	var outline := Line2D.new()
+	outline.width = OUTLINE_WIDTH * 1.5
+	outline.default_color = color
+	outline.closed = true
+	outline.z_index = 2 # Below local hover (5-10)
+	for point in points:
+		outline.add_point(point)
+	add_child(outline)
+
+	# Create glow fill
+	var glow := Polygon2D.new()
+	glow.color = Color(color, 0.35)
+	glow.z_index = 1 # Below local hover
+	glow.polygon = PackedVector2Array(points)
+	add_child(glow)
+
+	# Create label with role initial
+	var label := Label.new()
+	label.text = role_key[0].to_upper() # "I" or "U"
+	label.add_theme_font_size_override("font_size", 32)
+	label.add_theme_color_override("font_color", color)
+	label.add_theme_color_override("font_outline_color", Color.BLACK)
+	label.add_theme_constant_override("outline_size", 3)
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+
+	# Position at hex center
+	var map_pos := cube_to_map(cube)
+	var center := map_to_local(map_pos)
+	label.position = center - Vector2(16, 20)
+	label.z_index = 6 # Above nomination glow but below hover outline
+	add_child(label)
+
+	_nomination_overlays[role_key] = {
+		"cube": cube,
+		"outline": outline,
+		"glow": glow,
+		"label": label,
+	}
+
+
+func _clear_nominations() -> void:
+	for role_key in _nomination_overlays.keys():
+		var data: Dictionary = _nomination_overlays[role_key]
+		if data.has("outline"):
+			data["outline"].queue_free()
+		if data.has("glow"):
+			data["glow"].queue_free()
+		if data.has("label"):
+			data["label"].queue_free()
+	_nomination_overlays.clear()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BUILT TILE OVERLAYS
+# ─────────────────────────────────────────────────────────────────────────────
+
+## Show a built card on the map
+func show_built_tile(cube: Vector3i, card: Dictionary) -> void:
+	if cube == INVALID_HEX:
+		return
+
+	# Clear nomination overlays when building
+	_clear_nominations()
+
+	var outlines := cube_outlines([cube])
+	if outlines.is_empty():
+		return
+
+	var points: Array[Vector2] = []
+	for point in outlines[0]:
+		points.append(point)
+
+	var card_color := _color_for_card(card)
+
+	# Create filled tile
+	var fill := Polygon2D.new()
+	fill.color = Color(card_color, 0.7)
+	fill.z_index = 12
+	fill.polygon = PackedVector2Array(points)
+	add_child(fill)
+
+	# Create outline
+	var outline := Line2D.new()
+	outline.width = OUTLINE_WIDTH
+	outline.default_color = card_color
+	outline.closed = true
+	outline.z_index = 13
+	for point in points:
+		outline.add_point(point)
+	add_child(outline)
+
+	# Create card label
+	var label := Label.new()
+	var suit_symbol := "?"
+	match card.get("suit", -1):
+		0: suit_symbol = "♥"
+		1: suit_symbol = "♦"
+		2: suit_symbol = "♠"
+	label.text = "%s%s" % [card.get("rank", "?"), suit_symbol]
+	label.add_theme_font_size_override("font_size", 28)
+	label.add_theme_color_override("font_color", Color.WHITE)
+	label.add_theme_color_override("font_outline_color", Color.BLACK)
+	label.add_theme_constant_override("outline_size", 4)
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+
+	var map_pos := cube_to_map(cube)
+	var center := map_to_local(map_pos)
+	label.position = center - Vector2(28, 18)
+	label.z_index = 14
+	add_child(label)
+
+	_built_overlays[cube] = {
+		"fill": fill,
+		"outline": outline,
+		"label": label,
+	}
+
+	print("HexField: Built %s at (%d,%d,%d)" % [label.text, cube.x, cube.y, cube.z])
+
+
+## Initialize map layers with optional deterministic seed.
+func _init_map_layers(seed: int = -1) -> void:
+	map_layers = MapLayers.new()
+	var actual_seed := seed if seed >= 0 else int(Time.get_ticks_msec())
+	map_layers.generate(self, FIELD_RADIUS, actual_seed)
+	print("HexField: map_layers generated with seed=%d" % actual_seed)
+
+
+## Re-init map layers with a specific seed (used by demo for determinism).
+func reinit_map_layers(seed: int) -> void:
+	_init_map_layers(seed)
+
+
+func get_layer_card(layer_type: int, cube: Vector3i) -> Dictionary:
+	if map_layers:
+		return map_layers.get_card(layer_type, cube)
+	return {}
+
+
+func get_perimeter_for_layer(layer_type: int) -> Dictionary:
+	if map_layers:
+		return map_layers.get_perimeter(layer_type)
+	return {}

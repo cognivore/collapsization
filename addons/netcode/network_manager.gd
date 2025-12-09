@@ -9,6 +9,7 @@ signal disconnected_from_server
 signal player_joined(player_id: int)
 signal player_left(player_id: int)
 signal message_received(from_id: int, message: Dictionary)
+signal game_message(type: int, from_id: int, data: Dictionary)
 
 ## Message types for the protocol
 enum MessageType {
@@ -16,6 +17,9 @@ enum MessageType {
 	CURSOR_UPDATE,
 	CHAT,
 	CUSTOM,
+	ROLE_ASSIGN,
+	GAME_STATE,
+	GAME_INTENT,
 }
 
 const DEFAULT_PORT := 7777
@@ -212,11 +216,17 @@ func _handle_message(from_id: int, message: Dictionary) -> void:
 			_handle_player_state(from_id, data)
 		MessageType.CURSOR_UPDATE:
 			_handle_cursor_update(from_id, data)
+		MessageType.ROLE_ASSIGN, MessageType.GAME_STATE, MessageType.GAME_INTENT:
+			game_message.emit(type, from_id, data)
 		_:
 			message_received.emit(from_id, message)
 
 	# Forward to other clients if server
 	if is_server() and from_id != 1:
+		if type == MessageType.GAME_INTENT:
+			return # server consumes intents; don't forward blindly
+		if type == MessageType.ROLE_ASSIGN or type == MessageType.GAME_STATE:
+			return # broadcast done explicitly by game logic
 		for peer_id in players.keys():
 			if peer_id != from_id and peer_id != 1:
 				transport.send(peer_id, var_to_bytes(message), true)

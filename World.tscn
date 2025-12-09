@@ -1,10 +1,12 @@
-[gd_scene load_steps=6 format=3 uid="uid://cn1lu8olilord"]
+[gd_scene load_steps=8 format=3 uid="uid://cn1lu8olilord"]
 
 [ext_resource type="Script" uid="uid://cwfl1j82hwewy" path="res://camera_2d_drag.gd" id="1_camera"]
 [ext_resource type="TileSet" uid="uid://cylntgfc02l81" path="res://green_tileset.tres" id="2_tileset"]
 [ext_resource type="Script" uid="uid://bmq0twyikl84o" path="res://hex_field.gd" id="3_hexfield"]
 [ext_resource type="Script" uid="uid://bi5q8qrjuycf1" path="res://addons/netcode/cursor_sync.gd" id="4_cursorsync"]
 [ext_resource type="Script" uid="uid://ul28ujfelhr3" path="res://addons/netcode/cursor_simulator.gd" id="5_simulator"]
+[ext_resource type="Script" path="res://scripts/game_manager.gd" id="6_gamemanager"]
+[ext_resource type="PackedScene" path="res://ui/GameHud.tscn" id="7_gamehud"]
 
 [node name="World" type="Node2D"]
 
@@ -19,5 +21,15 @@ script = ExtResource("4_cursorsync")
 [node name="CursorSimulator" type="Node" parent="."]
 script = ExtResource("5_simulator")
 
+[node name="GameManager" type="Node" parent="."]
+script = ExtResource("6_gamemanager")
+hex_field_path = NodePath("../HexField")
+
+[node name="GameHud" parent="." instance=ExtResource("7_gamehud")]
+game_manager_path = NodePath("../GameManager")
+hex_field_path = NodePath("../HexField")
+
 [node name="Camera2D" type="Camera2D" parent="."]
+position = Vector2(0, 0)
+zoom = Vector2(0.3, 0.3)
 script = ExtResource("1_camera")
