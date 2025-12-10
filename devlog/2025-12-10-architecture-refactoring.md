@@ -1,7 +1,7 @@
 # Architecture Refactoring: From Monoliths to Modules
 
-**Date:** December 10, 2025  
-**Commit:** e8a73aa  
+**Date:** December 10, 2025
+**Commit:** e8a73aa
 **Files changed:** 18 (+2142 / -783 lines)
 
 ## The Problem
@@ -9,7 +9,7 @@
 We had reached a critical inflection point. Three scripts had grown into unmanageable monoliths:
 
 - `game_manager.gd` — 870+ lines handling phases, scoring, networking, fog, and state
-- `game_hud.gd` — 800+ lines mixing input routing, UI updates, and debug overlays  
+- `game_hud.gd` — 800+ lines mixing input routing, UI updates, and debug overlays
 - `hex_field.gd` — 700+ lines combining tile rendering, overlays, fog, and click handling
 
 Every attempt to implement new game rules resulted in a debugging nightmare. Want to add advisor claims to nominations? Touch 5 different sections of `game_manager.gd`. Want to fix a button state bug? Navigate through 400 lines of interleaved UI logic. The architecture had become the bottleneck.
@@ -29,6 +29,8 @@ scripts/game/phases/
 
 Each phase handler encapsulates entry conditions, valid actions, and exit transitions. The main `GameManager` now delegates to these handlers rather than containing massive switch statements.
 
+**Reality check:** The new phase scripts exist but are not wired in. `GameManager._transition_to()` still calls `_enter_draw_phase()/_enter_nominate_phase()/_enter_place_phase()` defined on `GameManager` itself; nothing instantiates or calls `DrawPhase`, `NominatePhase`, or `PlacePhase`. We now have duplicated phase logic (the phase classes vs. the `_enter_*` methods), and they are already diverging (e.g., DrawPhase uses `INVALID_HEX` sentinels while `GameManager` uses empty dictionaries). Until we actually delegate to these classes, this extraction is just dead code plus drift risk.
+
 ### Field Overlay Manager
 
 Hex overlays were the messiest part of `hex_field.gd`. Selection highlights, nomination borders, built tile markers, fog meshes, and reality labels all competed for the same rendering code. We created:
@@ -46,6 +48,8 @@ The overlay manager now owns:
 - Reality labels (revealed at game over)
 - Proper z-index layering for all elements
 
+**Reality check:** Overlay logic did move out of `hex_field.gd`, but `overlay_manager.gd` is ~400 lines and `hex_field.gd` is still ~600 lines of click handling, logging, and overlay coordination. `FieldOverlayManager` also relies on callers to precompute outlines and colors, so coupling remains: geometry, suit coloring, and claim labels are still assembled in `hex_field.gd`. There are no tests for the triangle math or label placement, so regressions would still only show up visually. Net effect: we relocated the mess, not fully simplified it.
+
 ### Service Layer
 
 Input handling was a disaster. Mouse clicks could target the HUD or the game world, but the routing logic was duplicated and buggy. We introduced:
@@ -62,6 +66,10 @@ scripts/ui/
 └── action_panel.gd  # Button state management
 ```
 
+**Reality check (input routing):** `InputRouter` is constructed in `game_hud.gd` but never used. Click routing still happens in `_input` via bespoke HUD-bounds checks, so the original duplication and CanvasLayer quirks remain. We need to either wire `route_mouse_event()` into `_input`/`_unhandled_input` or drop the helper.
+
+**Reality check (action panel):** `ActionPanel.compute_state/apply_state` is actually used in `_update_ui`, so button visibility/enablement is centralized. However, the surrounding HUD logic (selection resets, status text, click handling) is still sprawled across `game_hud.gd` with heavy logging and no tests. We reduced one knot of conditionals but did not meaningfully shrink the HUD module.
+
 ### Debug Infrastructure
 
 Debug overlays were hardcoded into `game_hud.gd`. We extracted a reusable component:
@@ -71,6 +79,8 @@ scripts/debug/
 └── debug_hud.gd  # Configurable debug overlay panel
 ```
 
+**Reality check:** `DebugHUD` is reusable and lightweight, but it ships always-on debug behavior: `_debug_enabled` defaults to true and `game_hud.gd` is peppered with `print`/`push_warning` calls. There's no build-time or runtime toggle to silence it outside of manual code edits, so production noise risk remains.
+
 ### Network Protocol
 
 Serialization for nominations and placements was inline in `GameManager`. We created:
@@ -79,6 +89,8 @@ Serialization for nominations and placements was inline in `GameManager`. We cre
 scripts/game/
 └── game_protocol.gd  # Network serialization helpers
 ```
+
+**Reality check:** `GameProtocol` is used for serializing nominations/placements, which is good, but the rest of the network/state payloads are still built inline in `GameManager._broadcast_state()` and intent handlers. Claim validation and role/peer mapping also remain in `GameManager`, so the protocol layer only covers a thin slice of the data model. Without tests, there's still a risk of shape drift between sender/receiver.
 
 ## The Nomination Data Model
 

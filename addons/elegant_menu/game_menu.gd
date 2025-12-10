@@ -72,7 +72,7 @@ func close_menu() -> void:
 	is_open = false
 	menu_panel.visible = false
 	get_tree().paused = false
-	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE  # Keep mouse visible
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE # Keep mouse visible
 	settings.save_settings()
 	menu_closed.emit()
 

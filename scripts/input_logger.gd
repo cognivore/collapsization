@@ -69,4 +69,3 @@ func _notification(what: int) -> void:
 		print("InputLogger: Mouse ENTERED window")
 	elif what == NOTIFICATION_WM_MOUSE_EXIT:
 		print("InputLogger: Mouse EXITED window")
-

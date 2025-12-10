@@ -46,7 +46,7 @@ func _log_camera_info() -> void:
 	print("  Mouse mode: %d (0=visible, 1=hidden, 2=captured, 3=confined)" % Input.mouse_mode)
 
 	# Calculate where center hex (0,0,0) maps to screen
-	var world_pos := Vector2.ZERO  # Center hex
+	var world_pos := Vector2.ZERO # Center hex
 	var screen_pos := get_viewport().get_canvas_transform() * world_pos
 	print("  Center hex (0,0,0) world: %s -> screen: %s" % [world_pos, screen_pos])
 

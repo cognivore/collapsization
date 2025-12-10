@@ -9,7 +9,7 @@ extends Node
 # ─────────────────────────────────────────────────────────────────────────────
 
 const MAX_LOG_FILES := 5
-const MAX_LOG_SIZE_BYTES := 1024 * 1024  # 1 MB per file
+const MAX_LOG_SIZE_BYTES := 1024 * 1024 # 1 MB per file
 const LOG_DIR := "user://logs/"
 const LOG_PREFIX := "debug_"
 
@@ -33,7 +33,7 @@ var _file: FileAccess
 var _current_log_path: String
 var _frame_count := 0
 var _session_id: String
-var _category_filters: Dictionary = {}  # Category -> bool (true = enabled)
+var _category_filters: Dictionary = {} # Category -> bool (true = enabled)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LIFECYCLE
@@ -237,4 +237,3 @@ func _generate_session_id() -> String:
 	for i in range(6):
 		result += chars[randi() % chars.length()]
 	return result
-

@@ -104,4 +104,3 @@ static func deserialize_placement(data: Dictionary) -> Dictionary:
 
 static func _serialize_hex(hex: Vector3i) -> Array:
 	return [hex.x, hex.y, hex.z]
-

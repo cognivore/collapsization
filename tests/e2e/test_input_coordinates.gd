@@ -25,7 +25,7 @@ func before_each() -> void:
 	_camera = Camera2D.new()
 	_camera.name = "Camera2D"
 	_camera.set_script(CameraDragScript)
-	_camera.zoom = Vector2(0.3, 0.3)  # Match World.tscn default
+	_camera.zoom = Vector2(0.3, 0.3) # Match World.tscn default
 	_world.add_child(_camera)
 	_camera.make_current()
 
@@ -70,7 +70,7 @@ func test_space_key_works_with_unfocused_controls() -> void:
 	# Add a focusable button (simulating card buttons)
 	var btn := Button.new()
 	btn.name = "TestButton"
-	btn.focus_mode = Control.FOCUS_CLICK  # Our fix: FOCUS_CLICK instead of FOCUS_ALL
+	btn.focus_mode = Control.FOCUS_CLICK # Our fix: FOCUS_CLICK instead of FOCUS_ALL
 	_world.add_child(btn)
 
 	# Move camera away
@@ -97,7 +97,7 @@ func test_focus_click_button_does_not_block_space() -> void:
 	# This tests the specific fix: FOCUS_CLICK mode prevents SPACE stealing
 	var btn := Button.new()
 	btn.name = "CardButton"
-	btn.focus_mode = Control.FOCUS_CLICK  # Our fix
+	btn.focus_mode = Control.FOCUS_CLICK # Our fix
 	btn.text = "Test Card"
 	_world.add_child(btn)
 
