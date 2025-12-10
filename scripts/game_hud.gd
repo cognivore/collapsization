@@ -3,6 +3,9 @@ extends CanvasLayer
 
 const MapLayers := preload("res://scripts/map_layers.gd")
 const GameRules := preload("res://scripts/game_rules.gd")
+const ActionPanel := preload("res://scripts/ui/action_panel.gd")
+const InputRouter := preload("res://scripts/services/input_router.gd")
+const DebugHUD := preload("res://scripts/debug/debug_hud.gd")
 
 # Hover shader for buttons
 var _button_hover_shader: Shader = preload("res://shaders/button_hover.gdshader")
@@ -11,8 +14,8 @@ const INVALID_HEX := Vector3i(0x7FFFFFFF, 0, 0)
 
 # Card colors by suit
 const SUIT_COLORS := {
-	0: Color(0.9, 0.2, 0.3),   # HEARTS - red
-	1: Color(0.95, 0.7, 0.2),  # DIAMONDS - gold
+	0: Color(0.9, 0.2, 0.3), # HEARTS - red
+	1: Color(0.95, 0.7, 0.2), # DIAMONDS - gold
 	2: Color(0.3, 0.35, 0.45), # SPADES - dark grey
 }
 
@@ -23,10 +26,12 @@ const ROLE_NAMES := ["Mayor", "Industry Advisor", "Urbanist"]
 @export var game_manager_path: NodePath = NodePath("../GameManager")
 @export var hex_field_path: NodePath = NodePath("../HexField")
 
-var _gm: Node  # GameManager (duck-typed)
+var _gm: Node # GameManager (duck-typed)
 var _hex_field: Node
 var _selected_card_index: int = -1
 var _selected_hex: Vector3i = INVALID_HEX
+var _action_panel := ActionPanel.new()
+var _input_router := InputRouter.new()
 
 # UI Root - tracks viewport size for proper resize handling
 @onready var _ui_root: Control = $UIRoot
@@ -55,7 +60,7 @@ var _click_indicator: ColorRect
 var _click_tween: Tween
 
 # Debug overlay
-var _debug_panel: PanelContainer
+var _debug_panel: Control
 var _debug_labels: Dictionary = {}
 var _debug_enabled := true
 var _last_click_screen: Vector2 = Vector2.ZERO
@@ -93,7 +98,7 @@ func _ready() -> void:
 
 	# Handle viewport resize - UIRoot must track viewport size for proper UI positioning
 	get_viewport().size_changed.connect(_on_viewport_resized)
-	_on_viewport_resized()  # Initialize size
+	_on_viewport_resized() # Initialize size
 
 	# Log rects after a frame so layout is complete
 	call_deferred("_log_ui_rects")
@@ -137,67 +142,18 @@ func _init_click_indicator() -> void:
 
 
 func _init_debug_overlay() -> void:
-	# Create debug panel in top-right corner (below top panel)
-	_debug_panel = PanelContainer.new()
-	_debug_panel.name = "DebugOverlay"
-	_debug_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_debug_panel.anchors_preset = Control.PRESET_TOP_RIGHT
-	_debug_panel.anchor_left = 1.0
-	_debug_panel.anchor_right = 1.0
-	_debug_panel.offset_left = -320
-	_debug_panel.offset_top = 12
-	_debug_panel.offset_right = -12
-	_debug_panel.offset_bottom = 300
-
-	# Dark semi-transparent background
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.0, 0.0, 0.0, 0.75)
-	style.corner_radius_top_left = 8
-	style.corner_radius_top_right = 8
-	style.corner_radius_bottom_left = 8
-	style.corner_radius_bottom_right = 8
-	style.content_margin_left = 8
-	style.content_margin_right = 8
-	style.content_margin_top = 8
-	style.content_margin_bottom = 8
-	_debug_panel.add_theme_stylebox_override("panel", style)
-
-	var vbox := VBoxContainer.new()
-	vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_debug_panel.add_child(vbox)
-
-	# Title
-	var title := Label.new()
-	title.text = "DEBUG OVERLAY"
-	title.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
-	title.add_theme_font_size_override("font_size", 14)
-	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	vbox.add_child(title)
-
-	# Add separator
-	var sep := HSeparator.new()
-	sep.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	vbox.add_child(sep)
-
-	# Create debug labels
-	var label_names := [
+	var label_names: Array[String] = [
 		"mouse_screen", "mouse_global", "mouse_local",
 		"camera_pos", "camera_zoom",
 		"hovered_cube", "last_click_cube",
 		"last_input", "frame", "focus"
 	]
-
-	for label_name in label_names:
-		var lbl := Label.new()
-		lbl.name = label_name
-		lbl.text = "%s: --" % label_name
-		lbl.add_theme_color_override("font_color", Color(0.8, 0.9, 0.8))
-		lbl.add_theme_font_size_override("font_size", 11)
-		lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		vbox.add_child(lbl)
-		_debug_labels[label_name] = lbl
-
+	_debug_panel = DebugHUD.create("DEBUG OVERLAY", label_names)
 	add_child(_debug_panel)
+	# Cast to access DebugHUD-specific properties
+	var debug_hud := _debug_panel as DebugHUD
+	if debug_hud:
+		_debug_labels = debug_hud._labels
 	_debug_panel.visible = _debug_enabled
 
 
@@ -209,12 +165,12 @@ func _init_hud_outline() -> void:
 	_hud_outline.z_index = 100
 
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0, 0, 0, 0)  # Transparent fill
+	style.bg_color = Color(0, 0, 0, 0) # Transparent fill
 	style.border_width_left = 3
 	style.border_width_top = 3
 	style.border_width_right = 3
 	style.border_width_bottom = 3
-	style.border_color = Color(0.2, 0.8, 0.4, 0.8)  # Green debug border
+	style.border_color = Color(0.2, 0.8, 0.4, 0.8) # Green debug border
 	style.corner_radius_top_left = 14
 	style.corner_radius_top_right = 14
 	style.corner_radius_bottom_left = 14
@@ -400,11 +356,11 @@ func _on_phase_changed(phase: int) -> void:
 
 	# Update timer label based on phase
 	match phase:
-		0:  # LOBBY
+		0: # LOBBY
 			_timer_label.text = "Waiting for players..."
-		1, 2, 3:  # DRAW, NOMINATE, PLACE - no time limit
+		1, 2, 3: # DRAW, NOMINATE, PLACE - no time limit
 			_timer_label.text = "Take your time"
-		4:  # GAME_OVER
+		4: # GAME_OVER
 			_timer_label.text = "Game Over"
 
 	# Clear selections on phase change
@@ -423,24 +379,26 @@ func _on_hand_updated(hand: Array, revealed_index: int) -> void:
 
 func _on_nominations_updated(nominations: Dictionary) -> void:
 	print("GameHud: Nominations updated - %s" % nominations)
-	var has_nominations := false
-	if nominations.get("industry", INVALID_HEX) != INVALID_HEX or nominations.get("urbanist", INVALID_HEX) != INVALID_HEX:
-		has_nominations = true
-		var entries: Array[String] = []
-		for key in nominations.keys():
-			var cube: Vector3i = nominations[key]
-			if cube != INVALID_HEX:
-				entries.append("%s: (%d,%d,%d)" % [key.capitalize(), cube.x, cube.y, cube.z])
+
+	# New format: {role: {hex: Vector3i, claim: Dictionary}}
+	var entries: Array[String] = []
+	for key in nominations.keys():
+		var nom_data: Dictionary = nominations[key]
+		if nom_data.is_empty():
+			continue
+		var cube: Vector3i = nom_data.get("hex", INVALID_HEX)
+		var claim: Dictionary = nom_data.get("claim", {})
+		if cube != INVALID_HEX:
+			var claim_str := MapLayers.label(claim) if not claim.is_empty() else "?"
+			entries.append("%s: %s" % [key.capitalize(), claim_str])
+
+	if not entries.is_empty():
 		_status_label.text = "Nominated: " + ", ".join(entries)
 
-	# Show nominations on the map
-	if has_nominations:
-		print("GameHud: Has nominations, hex_field=%s, has_method=%s" % [
-			_hex_field != null,
-			_hex_field.has_method("show_nominations") if _hex_field else false
-		])
-		if _hex_field and _hex_field.has_method("show_nominations"):
-			_hex_field.show_nominations(nominations)
+	# Always call show_nominations - it clears first, then shows valid ones
+	# This ensures nomination overlays are cleared when all nominations are INVALID_HEX
+	if _hex_field and _hex_field.has_method("show_nominations"):
+		_hex_field.show_nominations(nominations)
 
 	_update_ui()
 
@@ -512,10 +470,15 @@ func _on_placement_resolved(_turn_idx: int, placement: Dictionary) -> void:
 	if cube == INVALID_HEX:
 		return
 
-	# Show built tile on map
+	# Get which advisor's nomination was chosen
+	var winning_role: String = placement.get("winning_role", "")
+
+	# Show built tile on map (winning advisor's claim persists)
 	if _hex_field and _hex_field.has_method("show_built_tile"):
-		_hex_field.show_built_tile(cube, card)
-		print("GameHud: Showing built tile at (%d,%d,%d)" % [cube.x, cube.y, cube.z])
+		_hex_field.show_built_tile(cube, card, winning_role)
+		print("GameHud: Showing built tile at (%d,%d,%d) by %s" % [
+			cube.x, cube.y, cube.z, winning_role if not winning_role.is_empty() else "unknown"
+		])
 
 
 func _on_game_over(reason: String, final_scores: Dictionary) -> void:
@@ -527,7 +490,7 @@ func _on_game_over(reason: String, final_scores: Dictionary) -> void:
 
 
 func _on_player_count_changed(count: int, required: int) -> void:
-	if _gm and _gm.phase == 0:  # LOBBY
+	if _gm and _gm.phase == 0: # LOBBY
 		_status_label.text = "Waiting for players... (%d/%d)" % [count, required]
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -544,13 +507,13 @@ func _on_hex_clicked(cube: Vector3i) -> void:
 	# Only allow hex selection in certain phases
 	# NOMINATE phase: Advisors select hex
 	# PLACE phase: Mayor selects hex
-	if phase == 2 and role in [1, 2]:  # NOMINATE, INDUSTRY/URBANIST
+	if phase == 2 and role in [1, 2]: # NOMINATE, INDUSTRY/URBANIST
 		_selected_hex = INVALID_HEX if cube == _selected_hex else cube
 		if _selected_hex != INVALID_HEX:
 			_status_label.text = "Selected hex: (%d,%d,%d) - Click COMMIT" % [_selected_hex.x, _selected_hex.y, _selected_hex.z]
 		else:
 			_status_label.text = "Selection cleared"
-	elif phase == 3 and role == 0:  # PLACE, MAYOR
+	elif phase == 3 and role == 0: # PLACE, MAYOR
 		_selected_hex = INVALID_HEX if cube == _selected_hex else cube
 		if _selected_hex != INVALID_HEX:
 			_status_label.text = "Selected hex: (%d,%d,%d) - Click BUILD" % [_selected_hex.x, _selected_hex.y, _selected_hex.z]
@@ -596,119 +559,39 @@ func _get_hand_instruction() -> String:
 	var phase: int = _gm.phase
 	var role: int = _gm.local_role
 
-	if role != 0:  # Not Mayor
+	if role != 0: # Not Mayor
 		return "REVEALED CARD"
 
 	match phase:
-		1:  # DRAW
+		1: # DRAW
 			return "Select a card to REVEAL"
-		3:  # PLACE
+		3: # PLACE
 			return "Select a card to BUILD"
 		_:
 			return "YOUR HAND"
 
 
 func _create_card_button(card: Dictionary, index: int, revealed_index: int) -> Button:
-	var btn := Button.new()
-	btn.custom_minimum_size = Vector2(90, 120)
-	btn.mouse_filter = Control.MOUSE_FILTER_STOP
-	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	# Use FOCUS_CLICK to prevent SPACE key from triggering when focused
-	# This allows SPACE to reach the camera for view reset
-	btn.focus_mode = Control.FOCUS_CLICK
-	btn.flat = false  # Ensure button is not flat
-	btn.disabled = false
-	print("GameHud: Creating card button %d, mouse_filter=%d" % [index, btn.mouse_filter])
-
-	var suit: int = card.get("suit", 0)
-	var rank: String = card.get("rank", "?")
-	var suit_symbol := "?"
-	match suit:
-		0: suit_symbol = "♥"
-		1: suit_symbol = "♦"
-		2: suit_symbol = "♠"
-
-	btn.text = "%s\n%s" % [rank, suit_symbol]
-	btn.set_meta("card_index", index)
-	btn.pressed.connect(_on_card_button_pressed.bind(index))
-	btn.gui_input.connect(_on_card_gui_input.bind(index))
-	print("GameHud: Button %d created with pressed signal connected" % index)
-
-	var suit_color: Color = SUIT_COLORS.get(suit, Color.WHITE)
-
-	# Normal style
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.95, 0.93, 0.88)
-	style.corner_radius_top_left = 8
-	style.corner_radius_top_right = 8
-	style.corner_radius_bottom_left = 8
-	style.corner_radius_bottom_right = 8
-	style.border_width_left = 3
-	style.border_width_right = 3
-	style.border_width_top = 3
-	style.border_width_bottom = 3
-	style.border_color = suit_color
-
-	# Hover style - white radiant glow effect
-	var hover_style := style.duplicate()
-	hover_style.bg_color = Color(1.0, 1.0, 0.98)  # Slightly warm white
-	hover_style.border_width_left = 5
-	hover_style.border_width_right = 5
-	hover_style.border_width_top = 5
-	hover_style.border_width_bottom = 5
-	hover_style.border_color = Color.WHITE  # White border on hover
-	# Add shadow glow effect
-	hover_style.shadow_color = Color(1.0, 1.0, 1.0, 0.8)
-	hover_style.shadow_size = 12
-	hover_style.shadow_offset = Vector2.ZERO
-
-	# Pressed style
-	var pressed_style := style.duplicate()
-	pressed_style.bg_color = Color(0.85, 0.9, 0.85)
-
-	btn.add_theme_stylebox_override("normal", style)
-	btn.add_theme_stylebox_override("hover", hover_style)
-	btn.add_theme_stylebox_override("pressed", pressed_style)
-	btn.add_theme_color_override("font_color", suit_color)
-	btn.add_theme_color_override("font_hover_color", Color.WHITE)  # White text on hover
-	btn.add_theme_color_override("font_pressed_color", suit_color)
-	btn.add_theme_font_size_override("font_size", 24)
-
-	# Add hover glow overlay
-	_add_hover_glow_overlay(btn, index)
-
-	# Selected state
-	if index == _selected_card_index:
-		var selected_style := style.duplicate()
-		selected_style.bg_color = Color(0.9, 1.0, 0.9)
-		selected_style.border_width_left = 5
-		selected_style.border_width_right = 5
-		selected_style.border_width_top = 5
-		selected_style.border_width_bottom = 5
-		selected_style.border_color = Color.WHITE
-		selected_style.shadow_color = Color(1.0, 1.0, 1.0, 0.9)
-		selected_style.shadow_size = 16
-		btn.add_theme_stylebox_override("normal", selected_style)
-		btn.add_theme_stylebox_override("hover", selected_style)
-
-	# Revealed indicator
-	if index == revealed_index:
-		var revealed_style := style.duplicate()
-		revealed_style.bg_color = Color(1.0, 0.95, 0.7)
-		btn.add_theme_stylebox_override("normal", revealed_style)
-		btn.text = "%s\n%s\n✓" % [rank, suit_symbol]
-
-	return btn
+	return _action_panel.create_card_button(
+		card,
+		index,
+		_selected_card_index,
+		revealed_index,
+		SUIT_COLORS,
+		_button_hover_shader,
+		_on_card_button_pressed,
+		_on_card_gui_input
+	)
 
 
 func _add_hover_glow_overlay(btn: Button, _index: int) -> void:
 	# Create a ColorRect overlay for the radiant glow effect
 	var glow := ColorRect.new()
 	glow.name = "HoverGlow"
-	glow.color = Color(1.0, 1.0, 1.0, 0.0)  # Start invisible
+	glow.color = Color(1.0, 1.0, 1.0, 0.0) # Start invisible
 	glow.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	glow.set_anchors_preset(Control.PRESET_FULL_RECT)
-	glow.z_index = -1  # Behind button content
+	glow.z_index = -1 # Behind button content
 
 	# Create shader material for animated glow
 	var mat := ShaderMaterial.new()
@@ -824,43 +707,16 @@ func _update_ui() -> void:
 	var role: int = _gm.local_role
 	var phase: int = _gm.phase
 
-	# Determine button visibility based on role and phase
-	var show_reveal := false
-	var show_commit := false
-	var show_build := false
-	var allow_build_partial := false
-	var allow_reveal_partial := false
-
-	# Phase 0=LOBBY, 1=DRAW, 2=NOMINATE, 3=PLACE, 4=GAME_OVER
-	# Role 0=MAYOR, 1=INDUSTRY, 2=URBANIST
-
-	if role == 0:  # MAYOR
-		if phase == 1:  # DRAW - Mayor reveals card
-			show_reveal = true
-			allow_reveal_partial = true
-		elif phase == 3:  # PLACE - Mayor builds
-			show_build = true
-			allow_build_partial = true
-	else:  # ADVISOR
-		if phase == 2:  # NOMINATE - Advisor commits
-			show_commit = _selected_hex != INVALID_HEX
-
-	_reveal_button.visible = show_reveal
-	_reveal_button.disabled = not (_selected_card_index >= 0 and _gm.revealed_index < 0)
-
-	_commit_button.visible = show_commit
-	_commit_button.disabled = not show_commit
-
-	_build_button.visible = show_build
-	_build_button.disabled = not (_selected_card_index >= 0 and _selected_hex != INVALID_HEX)
-
-	# Action card mirrors the main buttons for the Mayor
-	_action_card.visible = role == 0 and phase in [1, 3]
-	_action_reveal.visible = phase == 1
-	_action_reveal.disabled = not (_selected_card_index >= 0 and _gm.revealed_index < 0)
-	_action_build.visible = phase == 3
-	_action_build.disabled = not (_selected_card_index >= 0 and _selected_hex != INVALID_HEX)
-	_action_cancel.visible = role == 0 and phase in [1, 3]
+	var state := _action_panel.compute_state(role, phase, _selected_card_index, _selected_hex, _gm.revealed_index)
+	_action_panel.apply_state({
+		"reveal": _reveal_button,
+		"commit": _commit_button,
+		"build": _build_button,
+		"action_card": _action_card,
+		"action_reveal": _action_reveal,
+		"action_build": _action_build,
+		"action_cancel": _action_cancel,
+	}, state)
 
 
 func _update_role_label() -> void:
@@ -880,63 +736,46 @@ func _update_status_for_phase(phase: int) -> void:
 	print("GameHud: Updating status for phase=%d, role=%d" % [phase, role])
 
 	match phase:
-		0:  # LOBBY
+		0: # LOBBY
 			_status_label.text = "Waiting for players..."
-		1:  # DRAW
-			if role == 0:  # Mayor
+		1: # DRAW
+			if role == 0: # Mayor
 				_status_label.text = "Select a card and click REVEAL"
 			else:
 				_status_label.text = "Mayor is drawing cards..."
-		2:  # NOMINATE
-			if role in [1, 2]:  # Advisors
+		2: # NOMINATE
+			if role in [1, 2]: # Advisors
 				_status_label.text = "Click a hex to nominate, then COMMIT"
 			else:
 				_status_label.text = "Advisors are deciding..."
-		3:  # PLACE
-			if role == 0:  # Mayor
+		3: # PLACE
+			if role == 0: # Mayor
 				_status_label.text = "Select card + nominated hex, then BUILD"
 			else:
 				_status_label.text = "Mayor is placing a card..."
-		4:  # GAME_OVER
-			pass  # Handled by _on_game_over
+		4: # GAME_OVER
+			pass # Handled by _on_game_over
 
 
 func _input(event: InputEvent) -> void:
-	# Debug ALL mouse events - use push_error to force flush
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
 		push_warning("GameHud: _input MouseButton: button=%d, pressed=%s, position=%s" % [
 			mb.button_index, mb.pressed, mb.position
 		])
 		_last_input_summary = "MB%d %s" % [mb.button_index, "DOWN" if mb.pressed else "UP"]
+		# Use _is_click_in_hud_area which checks BottomPanel/TopPanel bounds,
+		# not _ui_root which fills entire viewport
+		if _is_click_in_hud_area(event.position):
+			_handle_hud_mouse_button(event)
+		else:
+			_handle_world_mouse_button(event)
 
-		if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
-			_show_click_indicator(mb.position)
-			_record_click_coordinates(mb.position)
-			# Manual hit test for card buttons since GUI events aren't reaching them
-			# If a button was hit, we're done. Otherwise forward to HexField
-			if _try_click_card_button(mb.position):
-				print("GameHud: Button hit, consuming event")
-				get_viewport().set_input_as_handled()
-				return
-			else:
-				print("GameHud: No button hit at %s" % mb.position)
-				# If click is outside HUD, forward directly to HexField
-				# (bypassing broken event propagation through CanvasLayer)
-				if not _is_click_in_hud_area(mb.position):
-					print("GameHud: Click outside HUD, forwarding to HexField")
-					if _hex_field and _hex_field.has_method("handle_external_click"):
-						_hex_field.handle_external_click()
-						get_viewport().set_input_as_handled()
-						return
-
-	# Cancel selection on right click
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
 		_selected_card_index = -1
 		_clear_hex_selection()
 		_update_ui()
 
-	# Keyboard shortcuts for cards: 1, 2, 3
 	if event is InputEventKey and event.pressed:
 		var ke := event as InputEventKey
 		print("GameHud: Key pressed: %s" % ke.as_text())
@@ -958,10 +797,32 @@ func _input(event: InputEvent) -> void:
 			KEY_ESCAPE:
 				_on_cancel_pressed()
 			KEY_F3:
-				# Toggle debug overlay
 				_debug_enabled = not _debug_enabled
 				if _debug_panel:
 					_debug_panel.visible = _debug_enabled
+
+
+func _handle_hud_mouse_button(event: InputEvent) -> void:
+	var mb := event as InputEventMouseButton
+	if mb == null:
+		return
+	if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
+		_show_click_indicator(mb.position)
+		_record_click_coordinates(mb.position)
+		if _try_click_card_button(mb.position):
+			get_viewport().set_input_as_handled()
+
+
+func _handle_world_mouse_button(event: InputEvent) -> void:
+	var mb := event as InputEventMouseButton
+	if mb == null:
+		return
+	if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
+		_show_click_indicator(mb.position)
+		_record_click_coordinates(mb.position)
+		if _hex_field and _hex_field.has_method("handle_external_click"):
+			_hex_field.handle_external_click()
+			get_viewport().set_input_as_handled()
 
 
 func _record_click_coordinates(screen_pos: Vector2) -> void:

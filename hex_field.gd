@@ -13,6 +13,9 @@ signal hex_clicked(cube: Vector3i)
 
 const PlayerStateScript := preload("res://addons/netcode/player_state.gd")
 const MapLayers := preload("res://scripts/map_layers.gd")
+const FieldOverlayManager := preload("res://scripts/field/overlay_manager.gd")
+const FogController := preload("res://scripts/field/fog_controller.gd")
+const HexagonTilemapAdapter := preload("res://addons/hexagon_tilemaplayer/adapter.gd")
 
 # Preload hover shader
 var _hover_shader: Shader = preload("res://shaders/hex_hover.gdshader")
@@ -32,23 +35,11 @@ var cursor_sync: Node # CursorSync
 @export var game_manager_path: NodePath = NodePath("../GameManager")
 var _game_manager: Node
 
-# Advisor visibility overlays
-var _visibility_nodes: Array[Node] = []
-
 # Layered map info (truth and advisor slices)
 var map_layers: MapLayers
 
-# Fog of war: cube -> Polygon2D
-var _fog: Dictionary = {}
-
-# Nomination overlays: role_key -> {cube, outline, glow, label}
-var _nomination_overlays: Dictionary = {}
-
-# Built tiles: cube -> {outline, label}
-var _built_overlays: Dictionary = {}
-
-# Selected hex overlay
-var _selected_overlay: Dictionary = {}
+var _overlay_mgr: FieldOverlayManager
+var _fog_controller: FogController
 
 # Colors for different roles
 const NOMINATION_COLORS := {
@@ -66,6 +57,13 @@ func _ready() -> void:
 	generate_field()
 	_init_map_layers()
 	_bind_game_manager()
+	_overlay_mgr = FieldOverlayManager.new()
+	_overlay_mgr.outline_width = OUTLINE_WIDTH
+	_overlay_mgr.glow_alpha = GLOW_ALPHA
+	add_child(_overlay_mgr)
+	_fog_controller = FogController.new()
+	_fog_controller.outline_width = OUTLINE_WIDTH
+	add_child(_fog_controller)
 	_build_fog()
 	_reveal_initial_fog()
 	_setup_local_highlight()
@@ -207,8 +205,8 @@ func _handle_hex_click() -> void:
 	var mouse_pos := to_local(global_mouse)
 	var cube := get_closest_cell_from_local(mouse_pos)
 	var is_fogged: bool = false
-	if _fog.has(cube):
-		var poly: Polygon2D = _fog[cube] as Polygon2D
+	if _fog_controller and _fog_controller.fog.has(cube):
+		var poly: Polygon2D = _fog_controller.fog[cube] as Polygon2D
 		if poly != null:
 			is_fogged = poly.visible
 
@@ -260,42 +258,18 @@ func _draw_click_marker(local_pos: Vector2) -> void:
 # ─────────────────────────────────────────────────────────────────────────────
 
 func show_selected_hex(cube: Vector3i) -> void:
+	if _overlay_mgr == null:
+		return
 	_clear_selected_hex()
 	if cube == INVALID_HEX:
 		return
 	var outlines := cube_outlines([cube])
-	if outlines.is_empty():
-		return
-	var points: Array[Vector2] = []
-	for p in outlines[0]:
-		points.append(p)
-
-	var color := Color(0.2, 0.7, 1.0, 0.9)
-
-	var outline := Line2D.new()
-	outline.width = OUTLINE_WIDTH * 1.4
-	outline.default_color = color
-	outline.closed = true
-	outline.z_index = 18
-	for p in points:
-		outline.add_point(p)
-	add_child(outline)
-
-	var glow := Polygon2D.new()
-	glow.color = Color(color, 0.25)
-	glow.z_index = 17
-	glow.polygon = PackedVector2Array(points)
-	add_child(glow)
-
-	_selected_overlay = {"outline": outline, "glow": glow, "cube": cube}
+	_overlay_mgr.show_selected_hex(self, cube, outlines)
 
 
 func _clear_selected_hex() -> void:
-	if _selected_overlay.has("outline"):
-		_selected_overlay["outline"].queue_free()
-	if _selected_overlay.has("glow"):
-		_selected_overlay["glow"].queue_free()
-	_selected_overlay.clear()
+	if _overlay_mgr:
+		_overlay_mgr.clear_selected_hex()
 
 
 func _is_demo_mode() -> bool:
@@ -472,93 +446,40 @@ func generate_field() -> void:
 
 
 func _build_fog() -> void:
-	# Create a dark overlay for each hex; turned off when revealed
-	for node in _fog.values():
-		if node:
-			node.queue_free()
-	_fog.clear()
-
 	var hexes := cube_range(Vector3i.ZERO, FIELD_RADIUS)
-	for cube in hexes:
-		var outlines := cube_outlines([cube])
-		if outlines.is_empty():
-			continue
-		var points: Array[Vector2] = []
-		for point in outlines[0]:
-			points.append(point)
-		var poly := Polygon2D.new()
-		poly.color = Color(0, 0, 0, 0.65)
-		poly.polygon = PackedVector2Array(points)
-		poly.z_index = 20
-		add_child(poly)
-		_fog[cube] = poly
+	_fog_controller.build(self, hexes, Callable(self, "cube_outlines"))
 
 
 func reveal_fog(cubes: Array) -> void:
-	print("HexField: Revealing fog for %d cubes, fog dict size=%d" % [cubes.size(), _fog.size()])
-	var revealed := 0
-	for cube in cubes:
-		var key: Vector3i = cube if cube is Vector3i else Vector3i(cube[0], cube[1], cube[2])
-		if key in _fog:
-			_fog[key].visible = false
-			revealed += 1
-		else:
-			print("HexField: Cube %s not in fog dict" % str(key))
+	if _fog_controller == null:
+		return
+	var revealed := _fog_controller.reveal(cubes)
+
+	# Lazily generate reality for newly revealed tiles
+	if map_layers:
+		for cube in cubes:
+			var c: Vector3i = cube if cube is Vector3i else Vector3i(cube[0], cube[1], cube[2])
+			map_layers.reveal_tile(c)
+
+	print("HexField: Revealing fog for %d cubes, fog dict size=%d" % [cubes.size(), _fog_controller.fog.size()])
 	print("HexField: Revealed %d fog polygons" % revealed)
 
 
 func show_visibility(entries: Array) -> void:
-	_clear_visibility()
+	_overlay_mgr.clear_visibility()
 	if entries.is_empty():
 		return
-	for entry in entries:
-		if not entry.has("cube"):
-			continue
-		var cube_arr: Array = entry["cube"]
-		if cube_arr.size() != 3:
-			continue
-		var cube := Vector3i(cube_arr[0], cube_arr[1], cube_arr[2])
-		# Reveal fog for visible cubes even if no card info
-		reveal_fog([cube])
-
-		if not entry.has("card"):
-			continue
-		var map_pos := cube_to_map(cube)
-		if get_cell_source_id(map_pos) == -1:
-			continue
-		var outlines := cube_outlines([cube])
-		if outlines.is_empty():
-			continue
-		var points: Array[Vector2] = []
-		for point in outlines[0]:
-			points.append(point)
-
-		var color := _color_for_card(entry["card"])
-
-		var outline := Line2D.new()
-		outline.width = OUTLINE_WIDTH * 0.6
-		outline.default_color = color
-		outline.closed = true
-		outline.z_index = 8
-		for point in points:
-			outline.add_point(point)
-		add_child(outline)
-
-		var glow := Polygon2D.new()
-		glow.color = Color(color, GLOW_ALPHA * 0.8)
-		glow.z_index = 3
-		glow.polygon = PackedVector2Array(points)
-		add_child(glow)
-
-		_visibility_nodes.append(outline)
-		_visibility_nodes.append(glow)
+	_overlay_mgr.show_visibility(
+		self,
+		entries,
+		Callable(self, "cube_outlines"),
+		Callable(self, "_color_for_card"),
+		Callable(self, "reveal_fog")
+	)
 
 
 func _clear_visibility() -> void:
-	for node in _visibility_nodes:
-		if node:
-			node.queue_free()
-	_visibility_nodes.clear()
+	_overlay_mgr.clear_visibility()
 
 
 func _color_for_card(card: Dictionary) -> Color:
@@ -578,81 +499,34 @@ func _color_for_card(card: Dictionary) -> Color:
 # ─────────────────────────────────────────────────────────────────────────────
 
 ## Show nominated hexes on the map (called when nominations are revealed)
+## Nominations format: {role: {hex: Vector3i, claim: Dictionary}}
 func show_nominations(nominations: Dictionary) -> void:
 	_clear_nominations()
 
 	for role_key in nominations.keys():
-		var cube: Vector3i = nominations[role_key]
+		var nom_data: Dictionary = nominations[role_key]
+		if nom_data.is_empty():
+			continue
+
+		var cube: Vector3i = nom_data.get("hex", INVALID_HEX)
 		if cube == INVALID_HEX:
 			continue
 
+		var claimed_card: Dictionary = nom_data.get("claim", {})
 		var color: Color = NOMINATION_COLORS.get(role_key, Color.WHITE)
-		_create_nomination_overlay(role_key, cube, color)
+		var outlines := cube_outlines([cube])
+		_overlay_mgr.show_nomination(self, role_key, cube, color, outlines, claimed_card)
 
-	print("HexField: Showing %d nominations" % _nomination_overlays.size())
+	print("HexField: Showing nominations")
 
 
-func _create_nomination_overlay(role_key: String, cube: Vector3i, color: Color) -> void:
+func _create_nomination_overlay(role_key: String, cube: Vector3i, color: Color, claimed_card: Dictionary = {}) -> void:
 	var outlines := cube_outlines([cube])
-	if outlines.is_empty():
-		return
-
-	var points: Array[Vector2] = []
-	for point in outlines[0]:
-		points.append(point)
-
-	# Create thick outline - lower z_index so hover highlight is above
-	var outline := Line2D.new()
-	outline.width = OUTLINE_WIDTH * 1.5
-	outline.default_color = color
-	outline.closed = true
-	outline.z_index = 2 # Below local hover (5-10)
-	for point in points:
-		outline.add_point(point)
-	add_child(outline)
-
-	# Create glow fill
-	var glow := Polygon2D.new()
-	glow.color = Color(color, 0.35)
-	glow.z_index = 1 # Below local hover
-	glow.polygon = PackedVector2Array(points)
-	add_child(glow)
-
-	# Create label with role initial
-	var label := Label.new()
-	label.text = role_key[0].to_upper() # "I" or "U"
-	label.add_theme_font_size_override("font_size", 32)
-	label.add_theme_color_override("font_color", color)
-	label.add_theme_color_override("font_outline_color", Color.BLACK)
-	label.add_theme_constant_override("outline_size", 3)
-	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-
-	# Position at hex center
-	var map_pos := cube_to_map(cube)
-	var center := map_to_local(map_pos)
-	label.position = center - Vector2(16, 20)
-	label.z_index = 6 # Above nomination glow but below hover outline
-	add_child(label)
-
-	_nomination_overlays[role_key] = {
-		"cube": cube,
-		"outline": outline,
-		"glow": glow,
-		"label": label,
-	}
+	_overlay_mgr.show_nomination(self, role_key, cube, color, outlines, claimed_card)
 
 
 func _clear_nominations() -> void:
-	for role_key in _nomination_overlays.keys():
-		var data: Dictionary = _nomination_overlays[role_key]
-		if data.has("outline"):
-			data["outline"].queue_free()
-		if data.has("glow"):
-			data["glow"].queue_free()
-		if data.has("label"):
-			data["label"].queue_free()
-	_nomination_overlays.clear()
+	_overlay_mgr.clear_nominations()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -660,89 +534,70 @@ func _clear_nominations() -> void:
 # ─────────────────────────────────────────────────────────────────────────────
 
 ## Show a built card on the map
-func show_built_tile(cube: Vector3i, card: Dictionary) -> void:
+## winning_role: which advisor's nomination was chosen (their claim persists forever)
+func show_built_tile(cube: Vector3i, card: Dictionary, winning_role: String = "") -> void:
 	if cube == INVALID_HEX:
 		return
 
-	# Clear nomination overlays when building
-	_clear_nominations()
+	# Persist winning nomination (stays forever), clear losing nomination
+	if not winning_role.is_empty():
+		_overlay_mgr.persist_nomination(winning_role)
+		var losing_role := "urbanist" if winning_role == "industry" else "industry"
+		_overlay_mgr.clear_nomination(losing_role)
+	else:
+		# Fallback: clear all nominations
+		_clear_nominations()
 
 	var outlines := cube_outlines([cube])
 	if outlines.is_empty():
 		return
-
-	var points: Array[Vector2] = []
-	for point in outlines[0]:
-		points.append(point)
-
 	var card_color := _color_for_card(card)
+	_overlay_mgr.show_built(self, cube, card_color, outlines, card)
+	print("HexField: Built at (%d,%d,%d) - %s (by %s)" % [
+		cube.x, cube.y, cube.z, MapLayers.label(card),
+		winning_role.capitalize() if not winning_role.is_empty() else "unknown"
+	])
 
-	# Create filled tile
-	var fill := Polygon2D.new()
-	fill.color = Color(card_color, 0.7)
-	fill.z_index = 12
-	fill.polygon = PackedVector2Array(points)
-	add_child(fill)
 
-	# Create outline
-	var outline := Line2D.new()
-	outline.width = OUTLINE_WIDTH
-	outline.default_color = card_color
-	outline.closed = true
-	outline.z_index = 13
-	for point in points:
-		outline.add_point(point)
-	add_child(outline)
+# ─────────────────────────────────────────────────────────────────────────────
+# GAME OVER - REVEAL ALL REALITY
+# ─────────────────────────────────────────────────────────────────────────────
 
-	# Create card label
-	var label := Label.new()
-	var suit_symbol := "?"
-	match card.get("suit", -1):
-		0: suit_symbol = "♥"
-		1: suit_symbol = "♦"
-		2: suit_symbol = "♠"
-	label.text = "%s%s" % [card.get("rank", "?"), suit_symbol]
-	label.add_theme_font_size_override("font_size", 28)
-	label.add_theme_color_override("font_color", Color.WHITE)
-	label.add_theme_color_override("font_outline_color", Color.BLACK)
-	label.add_theme_constant_override("outline_size", 4)
-	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+## Reveal the TRUE cards on ALL tiles (called when game is over)
+## This shows what was actually hidden under each tile, exposing all lies
+func reveal_all_reality() -> void:
+	if map_layers == null:
+		print("HexField: No map_layers to reveal")
+		return
 
-	var map_pos := cube_to_map(cube)
-	var center := map_to_local(map_pos)
-	label.position = center - Vector2(28, 18)
-	label.z_index = 14
-	add_child(label)
+	# Clear fog entirely
+	if _fog_controller:
+		_fog_controller.clear_all()
 
-	_built_overlays[cube] = {
-		"fill": fill,
-		"outline": outline,
-		"label": label,
-	}
-
-	print("HexField: Built %s at (%d,%d,%d)" % [label.text, cube.x, cube.y, cube.z])
+	# Get all reality tiles (single layer now)
+	_overlay_mgr.reveal_all_reality(self, map_layers.truth, Callable(self, "cube_outlines"))
+	print("HexField: Revealed all reality - %d tiles" % map_layers.truth.size())
 
 
 ## Initialize map layers with optional deterministic seed.
 func _init_map_layers(seed: int = -1) -> void:
 	map_layers = MapLayers.new()
 	var actual_seed := seed if seed >= 0 else int(Time.get_ticks_msec())
-	map_layers.generate(self, FIELD_RADIUS, actual_seed)
-	print("HexField: map_layers generated with seed=%d" % actual_seed)
+	map_layers.init(actual_seed)
+	map_layers.init_center() # Center starts as A♥
+	print("HexField: map_layers initialized with seed=%d" % actual_seed)
 
 
 ## Re-init map layers with a specific seed (used by demo for determinism).
+## For tests, this still uses legacy generate() to populate all tiles eagerly.
 func reinit_map_layers(seed: int) -> void:
-	_init_map_layers(seed)
+	map_layers = MapLayers.new()
+	map_layers.generate(self, FIELD_RADIUS, seed)
+	print("HexField: map_layers regenerated with seed=%d" % seed)
 
 
-func get_layer_card(layer_type: int, cube: Vector3i) -> Dictionary:
+## Get a tile's reality card (simplified - no layer type needed)
+func get_reality_card(cube: Vector3i) -> Dictionary:
 	if map_layers:
-		return map_layers.get_card(layer_type, cube)
-	return {}
-
-
-func get_perimeter_for_layer(layer_type: int) -> Dictionary:
-	if map_layers:
-		return map_layers.get_perimeter(layer_type)
+		return map_layers.get_card(cube)
 	return {}

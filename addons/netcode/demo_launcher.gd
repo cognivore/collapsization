@@ -3,6 +3,7 @@
 extends Node
 
 const GameRules := preload("res://scripts/game_rules.gd")
+const MapLayers := preload("res://scripts/map_layers.gd")
 
 signal demo_ready
 
@@ -210,22 +211,53 @@ func _bot_commit_nomination(gm: Node) -> void:
 		print("DemoLauncher: Bot role %d is not an advisor, skipping" % my_role)
 		return
 
-	# Pick best hex based on visibility - or fallback to adjacent
-	var best_hex: Vector3i = GameRules.pick_bot_nomination(
+	var role_name := "Industry" if my_role == 1 else "Urbanist"
+
+	# Get revealed card suit for strategic decision
+	var revealed_suit: int = -1
+	print("DemoLauncher: Bot %s hand.size=%d, revealed_index=%d" % [role_name, gm.hand.size(), gm.revealed_index])
+	if gm.hand.size() > 0:
+		# Advisors receive the revealed card in hand[0]
+		var revealed_card: Dictionary = gm.hand[0]
+		revealed_suit = revealed_card.get("suit", -1)
+		print("DemoLauncher: Bot %s sees revealed card suit=%d (%s)" % [role_name, revealed_suit, MapLayers.label(revealed_card)])
+	else:
+		print("DemoLauncher: Bot %s has no hand data, using fallback strategy" % role_name)
+
+	# Use strategic nomination based on revealed suit
+	# Pass built_hexes to avoid nominating already-built tiles
+	# Pass revealed_value so fallback lies are close to the revealed card
+	var built: Array = gm.built_hexes if "built_hexes" in gm else []
+	var revealed_value: int = 7 # Default
+	if gm.hand.size() > 0:
+		revealed_value = gm.hand[0].get("value", 7)
+
+	var result: Dictionary = GameRules.pick_strategic_nomination(
+		my_role,
+		revealed_suit,
 		gm.advisor_visibility,
 		gm.town_center,
-		true # prefer high value
+		built,
+		revealed_value
 	)
 
-	var role_name := "Industry" if my_role == 1 else "Urbanist"
-	if best_hex != GameRules.INVALID_HEX:
-		print("DemoLauncher: Bot %s committing hex (%d,%d,%d)" % [role_name, best_hex.x, best_hex.y, best_hex.z])
-		gm.commit_nomination(my_role, best_hex)
+	var chosen_hex: Vector3i = result.get("hex", GameRules.INVALID_HEX)
+	var claimed_card: Dictionary = result.get("claim", {})
+	var strategy: String = result.get("strategy", "unknown")
+
+	if chosen_hex != GameRules.INVALID_HEX:
+		print("DemoLauncher: Bot %s using strategy '%s' -> hex (%d,%d,%d), claim: %s" % [
+			role_name, strategy, chosen_hex.x, chosen_hex.y, chosen_hex.z,
+			MapLayers.label(claimed_card) if not claimed_card.is_empty() else "none"
+		])
+		gm.commit_nomination(my_role, chosen_hex, claimed_card)
 	else:
-		# Fallback: just pick first adjacent hex
+		# Ultimate fallback - should rarely happen now with improved GameRules fallback
 		var fallback: Vector3i = gm.town_center + Vector3i(1, -1, 0)
-		print("DemoLauncher: Bot %s using fallback hex (%d,%d,%d)" % [role_name, fallback.x, fallback.y, fallback.z])
-		gm.commit_nomination(my_role, fallback)
+		var fallback_suit: int = MapLayers.Suit.DIAMONDS if my_role == 1 else MapLayers.Suit.HEARTS
+		var fallback_claim := {"suit": fallback_suit, "value": revealed_value, "rank": "7"}
+		print("DemoLauncher: Bot %s using EMERGENCY fallback hex (%d,%d,%d)" % [role_name, fallback.x, fallback.y, fallback.z])
+		gm.commit_nomination(my_role, fallback, fallback_claim)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # BOT SPAWNING

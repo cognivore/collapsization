@@ -1,7 +1,8 @@
-extends "res://addons/gut/test.gd"
+extends GutTest
 
 const MapLayers := preload("res://scripts/map_layers.gd")
 const GameManager := preload("res://scripts/game_manager.gd")
+
 
 class FakeMessageType:
 	const ROLE_ASSIGN := 0
@@ -9,9 +10,9 @@ class FakeMessageType:
 	const GAME_INTENT := 2
 
 
-class FakeNet:
+class FakeNet extends Node:
 	var players := {1: null}
-	var MessageType := FakeMessageType
+	var MessageType := FakeMessageType.new()
 	func is_server() -> bool:
 		return true
 	func send_message(_to: int, _type: int, _data: Dictionary, _reliable := true) -> void:
@@ -22,13 +23,16 @@ class FakeNet:
 		return 1
 
 
-class FakeField:
+class FakeField extends Node:
 	var map_layers := MapLayers.new()
 	func _init():
+		# Single layer now - truth maps cube directly to card
 		map_layers.truth = {
-			MapLayers.LayerType.RESOURCES: {Vector3i.ZERO: MapLayers.make_card(MapLayers.Suit.DIAMONDS, "Q")},
-			MapLayers.LayerType.DESIRABILITY: {Vector3i.ZERO: MapLayers.make_card(MapLayers.Suit.HEARTS, "10")},
+			Vector3i.ZERO: MapLayers.make_card(MapLayers.Suit.DIAMONDS, "Q"),
+			Vector3i(1, -1, 0): MapLayers.make_card(MapLayers.Suit.HEARTS, "10"),
 		}
+	func cube_ring(_center: Vector3i, _radius: int) -> Array:
+		return [Vector3i(1, -1, 0), Vector3i(0, 1, -1), Vector3i(-1, 1, 0), Vector3i(-1, 0, 1), Vector3i(0, -1, 1), Vector3i(1, 0, -1)]
 
 
 func test_rank_ordering_prefers_queen_over_king():
@@ -39,15 +43,25 @@ func test_rank_ordering_prefers_queen_over_king():
 
 func test_best_guess_scores_mayor_and_advisor():
 	var gm := GameManager.new()
-	gm._net_mgr = FakeNet.new()
-	gm._hex_field = FakeField.new()
+	var fake_net := FakeNet.new()
+	var fake_field := FakeField.new()
+	add_child(fake_net)
+	add_child(fake_field)
+	add_child(gm)
+
+	gm._net_mgr = fake_net
+	gm._hex_field = fake_field
 	gm.phase = GameManager.Phase.PLACE
 	gm.hand = [MapLayers.make_card(MapLayers.Suit.DIAMONDS, "Q")]
-	gm.nominations["industry"] = Vector3i.ZERO
-	gm.nominations["urbanist"] = Vector3i(1, -1, 0)
+	# Use new nomination format: {hex: Vector3i, claim: Dictionary}
+	gm.nominations["industry"] = {"hex": Vector3i.ZERO, "claim": MapLayers.make_card(MapLayers.Suit.DIAMONDS, "Q")}
+	gm.nominations["urbanist"] = {"hex": Vector3i(1, -1, 0), "claim": MapLayers.make_card(MapLayers.Suit.HEARTS, "K")}
 
-	gm.mayor_place(0, Vector3i.ZERO)
+	gm.place_card(0, Vector3i.ZERO)
 
 	assert_eq(gm.scores["mayor"], 1, "Mayor gets best-guess point")
 	assert_eq(gm.scores["industry"], 1, "Industry advisor gets point when chosen")
 
+	gm.queue_free()
+	fake_net.queue_free()
+	fake_field.queue_free()
