@@ -89,7 +89,8 @@ func test_commit_uses_claim_and_waits_for_both() -> void:
 	gm._init_phase_handlers()
 	gm.phase = GameManager.Phase.NOMINATE
 	gm.town_center = Vector3i.ZERO
-	gm.built_hexes = []
+	# Town center must be in built_hexes so adjacent tiles are on the playable frontier
+	gm.built_hexes = [Vector3i.ZERO]
 
 	var claim := MapLayers.make_card(MapLayers.Suit.DIAMONDS, "K")
 	gm.commit_nomination(GameManager.Role.INDUSTRY, Vector3i(1, 0, -1), claim)

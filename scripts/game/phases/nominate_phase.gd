@@ -11,9 +11,8 @@ func enter(gm) -> void:
 func commit(gm, role: int, hex: Vector3i, claimed_card: Dictionary = {}) -> void:
 	if gm.phase != gm.Phase.NOMINATE:
 		return
-	if not gm.GameRules.is_valid_nomination(gm.town_center, hex):
-		return
-	if not gm.GameRules.can_nominate_hex(hex, gm.built_hexes):
+	# is_valid_nomination checks: not invalid, not built, adjacent to any built hex
+	if not gm.GameRules.is_valid_nomination(hex, gm.built_hexes):
 		return
 
 	var role_key: String = gm._role_to_key(role)

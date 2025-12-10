@@ -236,7 +236,6 @@ func _bot_commit_nomination(gm: Node) -> void:
 		my_role,
 		revealed_suit,
 		gm.advisor_visibility,
-		gm.town_center,
 		built,
 		revealed_value
 	)

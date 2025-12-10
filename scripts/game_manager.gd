@@ -386,6 +386,15 @@ func _emit_initial_fog() -> void:
 	DebugLogger.log("GameManager: Initial fog revealed for %d hexes" % visible_cubes.size())
 
 
+## Expand fog around a newly built hex - reveals the hex and all adjacent tiles
+func _expand_fog_around(hex: Vector3i) -> void:
+	var to_reveal: Array = [hex]
+	for adj in GameRules.get_adjacent_hexes(hex):
+		to_reveal.append(adj)
+	fog_updated.emit(to_reveal)
+	DebugLogger.log("GameManager: Fog expanded around %s (%d tiles)" % [_hex_to_string(hex), to_reveal.size()])
+
+
 func _get_reality(cube: Vector3i) -> Dictionary:
 	if _hex_field and _hex_field.map_layers:
 		return _hex_field.map_layers.get_card(cube)
@@ -520,9 +529,11 @@ func _visibility_payload_for_role(role: Role) -> Array:
 	if role == Role.MAYOR:
 		return []
 
-	# Advisors (Industry and Urbanist) see the single reality layer
+	# Advisors (Industry and Urbanist) see all tiles on the playable frontier
+	# The frontier = all hexes adjacent to any built hex
 	var result: Array = []
-	for cube in _hex_field.cube_ring(town_center, 1):
+	var frontier: Array[Vector3i] = GameRules.get_playable_frontier(built_hexes)
+	for cube in frontier:
 		var card: Dictionary = _hex_field.map_layers.get_card(cube)
 		result.append(GameProtocol.serialize_visibility_entry(cube, card))
 	return result
@@ -531,9 +542,17 @@ func _visibility_payload_for_role(role: Role) -> Array:
 func _fog_payload() -> Array:
 	if _hex_field == null:
 		return []
-	var visible: Array = [town_center]
-	for cube in _hex_field.cube_ring(town_center, 1):
-		visible.append(cube)
+	# Return all revealed hexes: each built hex and its surrounding ring
+	var visible: Array = []
+	var seen: Dictionary = {}
+	for built in built_hexes:
+		if not seen.has(built):
+			visible.append(built)
+			seen[built] = true
+		for adj in GameRules.get_adjacent_hexes(built):
+			if not seen.has(adj):
+				visible.append(adj)
+				seen[adj] = true
 	return visible
 
 

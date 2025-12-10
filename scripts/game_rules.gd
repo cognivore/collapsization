@@ -21,11 +21,14 @@ static func is_adjacent_to_town(town_center: Vector3i, hex: Vector3i) -> bool:
 	return cube_distance(town_center, hex) == 1
 
 
-## Check if a hex is valid for nomination
-static func is_valid_nomination(town_center: Vector3i, hex: Vector3i) -> bool:
+## Check if a hex is valid for nomination (on the playable frontier and not built)
+## The playable frontier = all hexes adjacent to any built hex
+static func is_valid_nomination(hex: Vector3i, built_hexes: Array) -> bool:
 	if hex == INVALID_HEX:
 		return false
-	return is_adjacent_to_town(town_center, hex)
+	if hex in built_hexes:
+		return false
+	return is_on_playable_frontier(hex, built_hexes)
 
 
 ## Check if all advisors have committed their nominations
@@ -65,11 +68,32 @@ static func get_adjacent_hexes(center: Vector3i) -> Array[Vector3i]:
 	return result
 
 
+## Get all hexes adjacent to any built hex (the "playable frontier")
+## These are the hexes that can be nominated - they neighbor existing buildings
+static func get_playable_frontier(built_hexes: Array) -> Array[Vector3i]:
+	var frontier: Array[Vector3i] = []
+	var seen: Dictionary = {}
+	for built in built_hexes:
+		for adj in get_adjacent_hexes(built):
+			if adj not in built_hexes and not seen.has(adj):
+				frontier.append(adj)
+				seen[adj] = true
+	return frontier
+
+
+## Check if hex is adjacent to ANY built hex (on the playable frontier)
+static func is_on_playable_frontier(hex: Vector3i, built_hexes: Array) -> bool:
+	for built in built_hexes:
+		if cube_distance(built, hex) == 1:
+			return true
+	return false
+
+
 ## Pick best hex for bot based on visible layer (legacy simple behavior)
-## Returns the hex with highest non-spade value, or fallback to any adjacent
+## Returns the hex with highest non-spade value, or fallback to any on frontier
 static func pick_bot_nomination(
 	visibility: Array,
-	town_center: Vector3i,
+	built_hexes: Array,
 	prefer_high_value: bool = true
 ) -> Vector3i:
 	var best_hex: Vector3i = INVALID_HEX
@@ -87,8 +111,8 @@ static func pick_bot_nomination(
 
 		var cube := Vector3i(int(cube_arr[0]), int(cube_arr[1]), int(cube_arr[2]))
 
-		# Must be adjacent to town
-		if not is_adjacent_to_town(town_center, cube):
+		# Must be on playable frontier (adjacent to any built hex, not built)
+		if not is_valid_nomination(cube, built_hexes):
 			continue
 
 		var card: Dictionary = entry["card"]
@@ -106,11 +130,11 @@ static func pick_bot_nomination(
 			best_value = val
 			best_hex = cube
 
-	# Fallback to first adjacent hex if nothing found
+	# Fallback to first hex on frontier if nothing found
 	if best_hex == INVALID_HEX:
-		var adjacent := get_adjacent_hexes(town_center)
-		if not adjacent.is_empty():
-			best_hex = adjacent[0]
+		var frontier := get_playable_frontier(built_hexes)
+		if not frontier.is_empty():
+			best_hex = frontier[0]
 
 	return best_hex
 
@@ -129,8 +153,7 @@ static func pick_strategic_nomination(
 	my_role: int, # 1=Industry, 2=Urbanist
 	revealed_suit: int, # Suit of Mayor's revealed card
 	my_visibility: Array, # What this advisor can see
-	town_center: Vector3i,
-	built_hexes: Array = [], # Hexes that are already built (cannot nominate)
+	built_hexes: Array, # Hexes that are already built (playable frontier is derived from this)
 	revealed_value: int = 7 # Value of revealed card for fallback lies
 ) -> Dictionary:
 	var result := {"hex": INVALID_HEX, "claim": {}, "strategy": "fallback"}
@@ -152,11 +175,9 @@ static func pick_strategic_nomination(
 			continue
 
 		var cube := Vector3i(int(cube_arr[0]), int(cube_arr[1]), int(cube_arr[2]))
-		if not is_adjacent_to_town(town_center, cube):
-			continue
 
-		# Skip already-built hexes
-		if cube in built_hexes:
+		# Must be on playable frontier (adjacent to any built hex) and not built
+		if not is_valid_nomination(cube, built_hexes):
 			continue
 
 		var card: Dictionary = entry["card"]
@@ -289,17 +310,15 @@ static func pick_strategic_nomination(
 				"strategy": "desperate_lie"
 			}
 		else:
-			# Absolute last resort - pick any adjacent hex not in built_hexes
-			var adjacent := get_adjacent_hexes(town_center)
-			for adj in adjacent:
-				if adj not in built_hexes:
-					var lie_value: int = revealed_value if revealed_value > 0 else 7
-					result = {
-						"hex": adj,
-						"claim": {"suit": my_suit, "value": lie_value, "rank": _value_to_rank(lie_value)},
-						"strategy": "blind_fallback"
-					}
-					break
+			# Absolute last resort - pick any hex on the playable frontier
+			var frontier := get_playable_frontier(built_hexes)
+			if not frontier.is_empty():
+				var lie_value: int = revealed_value if revealed_value > 0 else 7
+				result = {
+					"hex": frontier[0],
+					"claim": {"suit": my_suit, "value": lie_value, "rank": _value_to_rank(lie_value)},
+					"strategy": "blind_fallback"
+				}
 
 	return result
 

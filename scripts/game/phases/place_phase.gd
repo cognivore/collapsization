@@ -20,6 +20,9 @@ func place(gm, card_index: int, hex: Vector3i) -> void:
 	# Track built hex to prevent re-nomination
 	gm.built_hexes.append(hex)
 
+	# Expand fog around newly built hex - reveals adjacent tiles for future nominations
+	gm._expand_fog_around(hex)
+
 	# Determine winning advisor (whose nomination was chosen)
 	# If both nominated same hex, winner is determined by placed card suit
 	var winning_role: String = gm._get_nominating_role(hex, card)
