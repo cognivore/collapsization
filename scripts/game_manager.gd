@@ -6,6 +6,7 @@ class_name GameManager
 const MapLayers := preload("res://scripts/map_layers.gd")
 const GameRules := preload("res://scripts/game_rules.gd")
 const GameProtocol := preload("res://scripts/game/game_protocol.gd")
+const DebugLogger := preload("res://scripts/debug/debug_logger.gd")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SIGNALS
@@ -91,6 +92,7 @@ var local_role: Role = Role.MAYOR
 # Deterministic seed for deck shuffling (-1 = random)
 var game_seed: int = -1
 var _rng: RandomNumberGenerator
+var _phase_handlers: Dictionary = {}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LIFECYCLE
@@ -100,6 +102,7 @@ func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	_bind_hex_field()
 	_bind_network()
+	_init_phase_handlers()
 
 
 func _bind_hex_field() -> void:
@@ -116,6 +119,44 @@ func _bind_network() -> void:
 			_net_mgr.game_message.connect(_on_game_message)
 		_net_mgr.player_joined.connect(_on_player_joined)
 		_net_mgr.player_left.connect(_on_player_left)
+
+
+func _init_phase_handlers() -> void:
+	var draw_script = load("res://scripts/game/phases/draw_phase.gd")
+	var nominate_script = load("res://scripts/game/phases/nominate_phase.gd")
+	var place_script = load("res://scripts/game/phases/place_phase.gd")
+
+	if draw_script == null or nominate_script == null or place_script == null:
+		push_error("GameManager: Failed to load phase handler scripts!")
+		return
+
+	_phase_handlers = {
+		Phase.DRAW: draw_script.new(),
+		Phase.NOMINATE: nominate_script.new(),
+		Phase.PLACE: place_script.new(),
+	}
+
+
+func _get_phase_handler(phase_key: Phase):
+	if _phase_handlers.is_empty():
+		_init_phase_handlers()
+	return _phase_handlers.get(phase_key, null)
+
+
+func _empty_nomination_entry() -> Dictionary:
+	return GameProtocol.empty_nomination()
+
+
+func _empty_nomination_map() -> Dictionary:
+	return {
+		"industry": _empty_nomination_entry(),
+		"urbanist": _empty_nomination_entry(),
+	}
+
+
+func _reset_nominations_state() -> void:
+	advisor_commits = _empty_nomination_map()
+	nominations = _empty_nomination_map()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GAME START
@@ -149,12 +190,14 @@ func _initialize_game() -> void:
 		_rng.seed = game_seed
 	else:
 		_rng.randomize()
-	print("GameManager: Starting game with seed=%d" % _rng.seed)
+	DebugLogger.log("GameManager: Starting game with seed=%d" % _rng.seed)
 
 	_build_deck()
 	_discard.clear()
 	turn_index = 0
 	scores = {"mayor": 0, "industry": 0, "urbanist": 0}
+	_reset_nominations_state()
+	last_placement.clear()
 
 	# Center tile starts as built (A♥)
 	built_hexes.clear()
@@ -173,7 +216,7 @@ func _show_initial_built_center() -> void:
 	var center_card := MapLayers.make_card(MapLayers.Suit.HEARTS, "A")
 	if _hex_field.has_method("show_built_tile"):
 		_hex_field.show_built_tile(town_center, center_card, "")
-		print("GameManager: Center shown as built A♥")
+		DebugLogger.log("GameManager: Center shown as built A♥")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PHASE TRANSITIONS (action-driven)
@@ -184,42 +227,31 @@ func _transition_to(new_phase: Phase) -> void:
 	phase = new_phase
 	phase_end_time = 0.0 # No timeouts - action driven
 
-	match new_phase:
-		Phase.DRAW:
-			_enter_draw_phase()
-		Phase.NOMINATE:
-			_enter_nominate_phase()
-		Phase.PLACE:
-			_enter_place_phase()
-		Phase.GAME_OVER:
-			pass # Already handled by _finish_game
+	var handler = _get_phase_handler(new_phase)
+	if handler:
+		handler.enter(self)
 
-	print("GameManager: Phase %s -> %s" % [Phase.keys()[old_phase], Phase.keys()[new_phase]])
+	DebugLogger.log("GameManager: Phase %s -> %s" % [Phase.keys()[old_phase], Phase.keys()[new_phase]])
 	phase_changed.emit(phase)
 	_broadcast_state()
 
 
 func _enter_draw_phase() -> void:
-	hand = _draw_cards(3)
-	revealed_index = -1
-	advisor_commits = {"industry": {}, "urbanist": {}}
-	nominations = {"industry": {}, "urbanist": {}}
-	last_placement.clear()
-	hand_updated.emit(hand, revealed_index)
-	nominations_updated.emit(nominations) # Notify to clear nomination overlays
-	print("GameManager: DRAW - Mayor has %d cards" % hand.size())
+	var handler = _get_phase_handler(Phase.DRAW)
+	if handler:
+		handler.enter(self)
 
 
 func _enter_nominate_phase() -> void:
-	advisor_commits = {"industry": {}, "urbanist": {}}
-	nominations = {"industry": {}, "urbanist": {}}
-	nominations_updated.emit(nominations)
-	commits_updated.emit(_get_commit_status())
-	print("GameManager: NOMINATE - Advisors choose hexes")
+	var handler = _get_phase_handler(Phase.NOMINATE)
+	if handler:
+		handler.enter(self)
 
 
 func _enter_place_phase() -> void:
-	print("GameManager: PLACE - Mayor chooses where to build")
+	var handler = _get_phase_handler(Phase.PLACE)
+	if handler:
+		handler.enter(self)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PLAYER ACTIONS
@@ -231,21 +263,9 @@ func reveal_card(index: int) -> void:
 		_send_intent("reveal", {"index": index})
 		return
 
-	if phase != Phase.DRAW:
-		print("GameManager: Cannot reveal - not in DRAW phase")
-		return
-	if not GameRules.is_valid_card_index(index, hand.size()):
-		print("GameManager: Invalid card index %d" % index)
-		return
-	if revealed_index >= 0:
-		print("GameManager: Card already revealed")
-		return
-
-	revealed_index = index
-	var card: Dictionary = hand[index]
-	print("GameManager: Mayor revealed card %d: %s" % [index, MapLayers.label(card)])
-	hand_updated.emit(hand, revealed_index)
-	_transition_to(Phase.NOMINATE)
+	var handler = _get_phase_handler(Phase.DRAW)
+	if handler:
+		handler.reveal(self, index)
 
 
 ## Advisor commits their nomination with a claimed card (hidden until both commit)
@@ -258,38 +278,15 @@ func commit_nomination(role: Role, hex: Vector3i, claimed_card: Dictionary = {})
 		})
 		return
 
-	if phase != Phase.NOMINATE:
-		print("GameManager: Cannot commit - not in NOMINATE phase")
-		return
-	if not GameRules.is_valid_nomination(town_center, hex):
-		print("GameManager: Invalid nomination hex")
-		return
-	if hex in built_hexes:
-		print("GameManager: Cannot nominate already-built hex")
-		return
-
-	var role_key: String = _role_to_key(role)
-	if role_key.is_empty():
-		print("GameManager: Invalid role for nomination")
-		return
-
-	advisor_commits[role_key] = {"hex": hex, "claim": claimed_card}
-	print("GameManager: %s committed nomination - %s at %s" % [
-		role_key.capitalize(),
-		MapLayers.label(claimed_card) if not claimed_card.is_empty() else "no claim",
-		_hex_to_string(hex)
-	])
-	commits_updated.emit(_get_commit_status())
-	_broadcast_state()
-
-	if _all_advisors_committed():
-		_reveal_nominations()
+	var handler = _get_phase_handler(Phase.NOMINATE)
+	if handler:
+		handler.commit(self, role, hex, claimed_card)
 
 
 func _all_advisors_committed() -> bool:
 	var ind: Dictionary = advisor_commits.get("industry", {})
 	var urb: Dictionary = advisor_commits.get("urbanist", {})
-	return not ind.is_empty() and not urb.is_empty()
+	return GameProtocol.is_valid_nomination_entry(ind) and GameProtocol.is_valid_nomination_entry(urb)
 
 
 func _reveal_nominations() -> void:
@@ -301,7 +298,7 @@ func _reveal_nominations() -> void:
 	var ind_claim: Dictionary = nominations["industry"].get("claim", {})
 	var urb_claim: Dictionary = nominations["urbanist"].get("claim", {})
 
-	print("GameManager: Nominations revealed - Industry: %s (%s), Urbanist: %s (%s)" % [
+	DebugLogger.log("GameManager: Nominations revealed - Industry: %s (%s), Urbanist: %s (%s)" % [
 		_hex_to_string(ind_hex),
 		MapLayers.label(ind_claim) if not ind_claim.is_empty() else "?",
 		_hex_to_string(urb_hex),
@@ -317,67 +314,14 @@ func place_card(card_index: int, hex: Vector3i) -> void:
 		_send_intent("place", {"card_index": card_index, "cube": [hex.x, hex.y, hex.z]})
 		return
 
-	if phase != Phase.PLACE:
-		print("GameManager: Cannot place - not in PLACE phase")
-		return
-	if not GameRules.is_valid_card_index(card_index, hand.size()):
-		print("GameManager: Invalid card index")
-		return
-	if not _is_nominated_hex(hex):
-		print("GameManager: Hex not nominated")
-		return
-
-	var card: Dictionary = hand[card_index]
-	hand.remove_at(card_index)
-
-	# Track built hex to prevent re-nomination
-	built_hexes.append(hex)
-
-	# Determine winning advisor (whose nomination was chosen)
-	# If both nominated same hex, winner is determined by placed card suit
-	var winning_role := _get_nominating_role(hex, card)
-	var winning_claim: Dictionary = {}
-	if not winning_role.is_empty():
-		winning_claim = nominations[winning_role].get("claim", {})
-
-	var placement := {
-		"turn": turn_index,
-		"card": card,
-		"cube": hex,
-		"winning_role": winning_role,
-		"winning_claim": winning_claim
-	}
-	last_placement = placement
-	_discard.append(card)
-
-	print("GameManager: Mayor placed %s at %s (chosen by %s)" % [
-		MapLayers.label(card), _hex_to_string(hex), winning_role.capitalize()
-	])
-
-	var score_deltas: Dictionary = _calculate_scores_with_claims(card, hex, nominations)
-	scores["mayor"] += score_deltas["mayor"]
-	scores["industry"] += score_deltas["industry"]
-	scores["urbanist"] += score_deltas["urbanist"]
-
-	placement_resolved.emit(turn_index, placement)
-	scores_updated.emit(scores)
-	hand_updated.emit(hand, revealed_index)
-	_broadcast_state()
-
-	# Check if the REALITY at this hex is SPADES (not the placed card!)
-	# Game ends when Mayor builds on a tile that is actually a spade in reality
-	var reality_is_spade := _check_reality_is_spade(hex, card)
-	if reality_is_spade:
-		_finish_game("Mayor built on a SPADE tile! (Advisor may have lied)")
-		return
-
-	turn_index += 1
-	_transition_to(Phase.DRAW)
+	var handler = _get_phase_handler(Phase.PLACE)
+	if handler:
+		handler.place(self, card_index, hex)
 
 
 func _finish_game(reason: String) -> void:
-	print("GameManager: GAME OVER - %s" % reason)
-	print("GameManager: Final scores - Mayor: %d, Industry: %d, Urbanist: %d" % [
+	DebugLogger.log("GameManager: GAME OVER - %s" % reason)
+	DebugLogger.log("GameManager: Final scores - Mayor: %d, Industry: %d, Urbanist: %d" % [
 		scores["mayor"], scores["industry"], scores["urbanist"]
 	])
 	phase = Phase.GAME_OVER
@@ -439,7 +383,7 @@ func _emit_initial_fog() -> void:
 	for cube in _hex_field.cube_ring(town_center, 1):
 		visible_cubes.append(cube)
 	fog_updated.emit(visible_cubes)
-	print("GameManager: Initial fog revealed for %d hexes" % visible_cubes.size())
+	DebugLogger.log("GameManager: Initial fog revealed for %d hexes" % visible_cubes.size())
 
 
 func _get_reality(cube: Vector3i) -> Dictionary:
@@ -454,7 +398,7 @@ func _check_reality_is_spade(hex: Vector3i, _placed_card: Dictionary) -> bool:
 	var reality := _get_reality(hex)
 	var has_spade := GameRules.is_spade(reality)
 	if has_spade:
-		print("GameManager: Reality at %s is SPADES! (%s)" % [
+		DebugLogger.log("GameManager: Reality at %s is SPADES! (%s)" % [
 			_hex_to_string(hex),
 			MapLayers.label(reality)
 		])
@@ -496,7 +440,7 @@ func _assign_roles() -> void:
 		if peer_id == _net_mgr.get_local_id():
 			local_role = role
 
-	print("GameManager: Roles - Mayor=%d, Industry=%d, Urbanist=%d" % [
+	DebugLogger.log("GameManager: Roles - Mayor=%d, Industry=%d, Urbanist=%d" % [
 		_peer_by_role.get(Role.MAYOR, -1),
 		_peer_by_role.get(Role.INDUSTRY, -1),
 		_peer_by_role.get(Role.URBANIST, -1),
@@ -545,16 +489,15 @@ func _build_state_payload(peer_id: int) -> Dictionary:
 		"scores": scores,
 		"phase_deadline": phase_end_time,
 		"last_placement": _serialize_placement(last_placement),
-		"town_center": [town_center.x, town_center.y, town_center.z],
+		"town_center": GameProtocol.serialize_town_center(town_center),
 		"built_hexes": _serialize_built_hexes(),
 	}
 
 	# Hand depends on role
 	var role: Role = _role_by_peer.get(peer_id, Role.MAYOR)
-	if role == Role.MAYOR:
-		payload["hand"] = {"cards": hand, "revealed_index": revealed_index}
-	elif revealed_index >= 0 and revealed_index < hand.size():
-		payload["hand"] = {"visible": [hand[revealed_index]], "revealed_index": revealed_index}
+	var hand_payload := GameProtocol.serialize_hand_for_role(int(role), hand, revealed_index)
+	if not hand_payload.is_empty():
+		payload["hand"] = hand_payload
 
 	# Visibility for advisors
 	var vis_data: Array = _visibility_payload_for_role(role)
@@ -581,7 +524,7 @@ func _visibility_payload_for_role(role: Role) -> Array:
 	var result: Array = []
 	for cube in _hex_field.cube_ring(town_center, 1):
 		var card: Dictionary = _hex_field.map_layers.get_card(cube)
-		result.append({"cube": [cube.x, cube.y, cube.z], "card": card})
+		result.append(GameProtocol.serialize_visibility_entry(cube, card))
 	return result
 
 
@@ -599,8 +542,8 @@ func _get_commit_status() -> Dictionary:
 	var ind: Dictionary = advisor_commits.get("industry", {})
 	var urb: Dictionary = advisor_commits.get("urbanist", {})
 	return {
-		"industry": not ind.is_empty(),
-		"urbanist": not urb.is_empty(),
+		"industry": GameProtocol.is_valid_nomination_entry(ind),
+		"urbanist": GameProtocol.is_valid_nomination_entry(urb),
 	}
 
 
@@ -705,7 +648,7 @@ func _apply_roles(data: Dictionary) -> void:
 	if _net_mgr:
 		var my_id: int = _net_mgr.get_local_id()
 		local_role = _role_by_peer.get(my_id, Role.MAYOR)
-		print("GameManager: My role is %s (peer %d)" % [Role.keys()[local_role], my_id])
+		DebugLogger.log("GameManager: My role is %s (peer %d)" % [Role.keys()[local_role], my_id])
 
 
 func _apply_game_state(data: Dictionary) -> void:
@@ -764,7 +707,7 @@ func _apply_game_state(data: Dictionary) -> void:
 
 ## Called when a hex is clicked on the map (from HexField)
 func on_hex_clicked(cube: Vector3i) -> void:
-	print("GameManager: Hex clicked (%d,%d,%d) in phase %s, role %s" % [
+	DebugLogger.log("GameManager: Hex clicked (%d,%d,%d) in phase %s, role %s" % [
 		cube.x, cube.y, cube.z, Phase.keys()[phase], Role.keys()[local_role]
 	])
 	# This is just a passthrough - the HUD handles selection state
@@ -772,7 +715,7 @@ func on_hex_clicked(cube: Vector3i) -> void:
 
 
 func _on_player_joined(peer_id: int) -> void:
-	print("GameManager: Player %d joined" % peer_id)
+	DebugLogger.log("GameManager: Player %d joined" % peer_id)
 
 	if _is_server():
 		var count: int = _net_mgr.players.size() if _net_mgr else 1
@@ -785,7 +728,7 @@ func _on_player_joined(peer_id: int) -> void:
 
 
 func _on_player_left(peer_id: int) -> void:
-	print("GameManager: Player %d left" % peer_id)
+	DebugLogger.log("GameManager: Player %d left" % peer_id)
 
 	if _is_server():
 		var count: int = _net_mgr.players.size() if _net_mgr else 1
@@ -831,10 +774,7 @@ func _deserialize_hex_dict(data: Dictionary) -> Dictionary:
 
 
 func _serialize_built_hexes() -> Array:
-	var result: Array = []
-	for h in built_hexes:
-		result.append([h.x, h.y, h.z])
-	return result
+	return GameProtocol.serialize_built_hexes(built_hexes)
 
 
 func _serialize_placement(p: Dictionary) -> Dictionary:

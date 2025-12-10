@@ -1,8 +1,6 @@
 extends RefCounted
 class_name PlacePhase
 
-const INVALID_HEX := Vector3i(0x7FFFFFFF, 0, 0)
-
 func enter(_gm) -> void:
 	# Placeholder hook for future per-phase setup (animations, timers, etc.)
 	pass
@@ -19,13 +17,27 @@ func place(gm, card_index: int, hex: Vector3i) -> void:
 	var card: Dictionary = gm.hand[card_index]
 	gm.hand.remove_at(card_index)
 
-	var placement := {"turn": gm.turn_index, "card": card, "cube": hex}
+	# Track built hex to prevent re-nomination
+	gm.built_hexes.append(hex)
+
+	# Determine winning advisor (whose nomination was chosen)
+	# If both nominated same hex, winner is determined by placed card suit
+	var winning_role: String = gm._get_nominating_role(hex, card)
+	var winning_claim: Dictionary = {}
+	if not winning_role.is_empty():
+		winning_claim = gm.nominations[winning_role].get("claim", {})
+
+	var placement: Dictionary = {
+		"turn": gm.turn_index,
+		"card": card,
+		"cube": hex,
+		"winning_role": winning_role,
+		"winning_claim": winning_claim
+	}
 	gm.last_placement = placement
 	gm._discard.append(card)
 
-	var score_deltas: Dictionary = gm.GameRules.calculate_turn_scores(
-		card, hex, gm.nominations, gm._get_reality
-	)
+	var score_deltas: Dictionary = gm._calculate_scores_with_claims(card, hex, gm.nominations)
 	gm.scores["mayor"] += score_deltas["mayor"]
 	gm.scores["industry"] += score_deltas["industry"]
 	gm.scores["urbanist"] += score_deltas["urbanist"]
@@ -35,8 +47,11 @@ func place(gm, card_index: int, hex: Vector3i) -> void:
 	gm.hand_updated.emit(gm.hand, gm.revealed_index)
 	gm._broadcast_state()
 
-	if gm.GameRules.is_spade(card):
-		gm._finish_game("Mayor built on SPADES!")
+	# Check if the REALITY at this hex is SPADES (not the placed card!)
+	# Game ends when Mayor builds on a tile that is actually a spade in reality
+	var reality_is_spade: bool = gm._check_reality_is_spade(hex, card)
+	if reality_is_spade:
+		gm._finish_game("Mayor built on a SPADE tile! (Advisor may have lied)")
 		return
 
 	gm.turn_index += 1

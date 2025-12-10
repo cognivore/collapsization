@@ -16,6 +16,7 @@ const MapLayers := preload("res://scripts/map_layers.gd")
 const FieldOverlayManager := preload("res://scripts/field/overlay_manager.gd")
 const FogController := preload("res://scripts/field/fog_controller.gd")
 const HexagonTilemapAdapter := preload("res://addons/hexagon_tilemaplayer/adapter.gd")
+const DebugLogger := preload("res://scripts/debug/debug_logger.gd")
 
 # Preload hover shader
 var _hover_shader: Shader = preload("res://shaders/hex_hover.gdshader")
@@ -33,6 +34,7 @@ var cursor_sync: Node # CursorSync
 
 # Reference to GameManager for click routing
 @export var game_manager_path: NodePath = NodePath("../GameManager")
+@export var overlay_debug: bool = false
 var _game_manager: Node
 
 # Layered map info (truth and advisor slices)
@@ -60,6 +62,7 @@ func _ready() -> void:
 	_overlay_mgr = FieldOverlayManager.new()
 	_overlay_mgr.outline_width = OUTLINE_WIDTH
 	_overlay_mgr.glow_alpha = GLOW_ALPHA
+	_overlay_mgr.debug_enabled = overlay_debug
 	add_child(_overlay_mgr)
 	_fog_controller = FogController.new()
 	_fog_controller.outline_width = OUTLINE_WIDTH
@@ -77,7 +80,7 @@ func _reveal_initial_fog() -> void:
 	for cube in cube_ring(center, 1):
 		initial_visible.append(cube)
 	reveal_fog(initial_visible)
-	print("HexField: Revealed initial fog for %d hexes" % initial_visible.size())
+	DebugLogger.log("HexField: Revealed initial fog for %d hexes" % initial_visible.size())
 
 
 func _find_cursor_sync() -> void:
@@ -163,7 +166,7 @@ func _process(_delta: float) -> void:
 	if Engine.get_process_frames() % 120 == 0:
 		var map_pos := cube_to_map(hovered) if hovered != INVALID_HEX else Vector2i(-1, -1)
 		var source_id := get_cell_source_id(map_pos) if hovered != INVALID_HEX else -1
-		print("HexField: mouse_local=%s -> cube=%s, map=%s, source=%d" % [mouse_pos, hovered, map_pos, source_id])
+		DebugLogger.log("HexField: mouse_local=%s -> cube=%s, map=%s, source=%d" % [mouse_pos, hovered, map_pos, source_id])
 
 	# Check if hex exists in our field
 	if hovered != INVALID_HEX:
@@ -186,7 +189,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if Engine.is_editor_hint():
 		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
-		print("HexField: _unhandled_input MouseButton LEFT pressed=%s" % event.is_pressed())
+		DebugLogger.log("HexField: _unhandled_input MouseButton LEFT pressed=%s" % event.is_pressed())
 		if event.is_pressed():
 			_handle_hex_click()
 
@@ -194,7 +197,7 @@ func _unhandled_input(event: InputEvent) -> void:
 ## Public method for external click handling - called by GameHud when click
 ## is outside HUD area (bypasses broken CanvasLayer event propagation)
 func handle_external_click() -> void:
-	print("HexField: handle_external_click called")
+	DebugLogger.log("HexField: handle_external_click called")
 	_handle_hex_click()
 
 
@@ -210,23 +213,23 @@ func _handle_hex_click() -> void:
 		if poly != null:
 			is_fogged = poly.visible
 
-	print("=== HexField Click ===")
-	print("  Viewport mouse: %s" % viewport_pos)
-	print("  Local mouse: %s" % mouse_pos)
-	print("  Cube: %s" % cube)
-	print("  Fogged: %s" % is_fogged)
-	print("  Source ID: %d" % get_cell_source_id(cube_to_map(cube)))
+	DebugLogger.log("=== HexField Click ===")
+	DebugLogger.log("  Viewport mouse: %s" % viewport_pos)
+	DebugLogger.log("  Local mouse: %s" % mouse_pos)
+	DebugLogger.log("  Cube: %s" % cube)
+	DebugLogger.log("  Fogged: %s" % is_fogged)
+	DebugLogger.log("  Source ID: %d" % get_cell_source_id(cube_to_map(cube)))
 
 	# Draw a debug marker at the clicked location
 	_draw_click_marker(mouse_pos)
 
 	if cube != INVALID_HEX and get_cell_source_id(cube_to_map(cube)) != -1:
-		print("HexField: Emitting hex_clicked for cube (%d,%d,%d)" % [cube.x, cube.y, cube.z])
+		DebugLogger.log("HexField: Emitting hex_clicked for cube (%d,%d,%d)" % [cube.x, cube.y, cube.z])
 		if _game_manager and _game_manager.has_method("on_hex_clicked"):
 			_game_manager.on_hex_clicked(cube)
 		hex_clicked.emit(cube)
 	else:
-		print("HexField: Invalid hex or outside field")
+		DebugLogger.log("HexField: Invalid hex or outside field")
 
 
 var _click_marker: Polygon2D = null
@@ -431,18 +434,18 @@ func set_local_color_index(color_index: int) -> void:
 func generate_field() -> void:
 	clear()
 	var hexes := cube_range(Vector3i.ZERO, FIELD_RADIUS)
-	print("HexField: Generating %d hexes" % hexes.size())
+	DebugLogger.log("HexField: Generating %d hexes" % hexes.size())
 	for cube in hexes:
 		var color_index := posmod(cube.x - cube.y, 3)
 		var map_pos := cube_to_map(cube)
 		set_cell(map_pos, SOURCE_ID, ATLAS_COORDS, color_index)
-	print("HexField: Field generated, used_cells=%d" % get_used_cells().size())
+	DebugLogger.log("HexField: Field generated, used_cells=%d" % get_used_cells().size())
 
 	# Debug: Verify center tile exists
 	var center_map := cube_to_map(Vector3i.ZERO)
 	var center_source := get_cell_source_id(center_map)
-	print("HexField: Center tile at map=%s, source_id=%d" % [center_map, center_source])
-	print("HexField: TileMapLayer visible=%s, z_index=%d" % [visible, z_index])
+	DebugLogger.log("HexField: Center tile at map=%s, source_id=%d" % [center_map, center_source])
+	DebugLogger.log("HexField: TileMapLayer visible=%s, z_index=%d" % [visible, z_index])
 
 
 func _build_fog() -> void:
@@ -461,8 +464,8 @@ func reveal_fog(cubes: Array) -> void:
 			var c: Vector3i = cube if cube is Vector3i else Vector3i(cube[0], cube[1], cube[2])
 			map_layers.reveal_tile(c)
 
-	print("HexField: Revealing fog for %d cubes, fog dict size=%d" % [cubes.size(), _fog_controller.fog.size()])
-	print("HexField: Revealed %d fog polygons" % revealed)
+	DebugLogger.log("HexField: Revealing fog for %d cubes, fog dict size=%d" % [cubes.size(), _fog_controller.fog.size()])
+	DebugLogger.log("HexField: Revealed %d fog polygons" % revealed)
 
 
 func show_visibility(entries: Array) -> void:
@@ -494,6 +497,10 @@ func _color_for_card(card: Dictionary) -> Color:
 			return PlayerStateScript.PLAYER_COLORS[0]
 
 
+func _nomination_color(role_key: String, _claim := {}) -> Color:
+	return NOMINATION_COLORS.get(role_key, Color.WHITE)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # NOMINATION OVERLAYS
 # ─────────────────────────────────────────────────────────────────────────────
@@ -513,16 +520,16 @@ func show_nominations(nominations: Dictionary) -> void:
 			continue
 
 		var claimed_card: Dictionary = nom_data.get("claim", {})
-		var color: Color = NOMINATION_COLORS.get(role_key, Color.WHITE)
-		var outlines := cube_outlines([cube])
-		_overlay_mgr.show_nomination(self, role_key, cube, color, outlines, claimed_card)
+		_overlay_mgr.show_nomination_for_cube(
+			self,
+			role_key,
+			cube,
+			Callable(self, "_nomination_color"),
+			Callable(self, "cube_outlines"),
+			claimed_card
+		)
 
-	print("HexField: Showing nominations")
-
-
-func _create_nomination_overlay(role_key: String, cube: Vector3i, color: Color, claimed_card: Dictionary = {}) -> void:
-	var outlines := cube_outlines([cube])
-	_overlay_mgr.show_nomination(self, role_key, cube, color, outlines, claimed_card)
+	DebugLogger.log("HexField: Showing nominations")
 
 
 func _clear_nominations() -> void:
@@ -553,7 +560,7 @@ func show_built_tile(cube: Vector3i, card: Dictionary, winning_role: String = ""
 		return
 	var card_color := _color_for_card(card)
 	_overlay_mgr.show_built(self, cube, card_color, outlines, card)
-	print("HexField: Built at (%d,%d,%d) - %s (by %s)" % [
+	DebugLogger.log("HexField: Built at (%d,%d,%d) - %s (by %s)" % [
 		cube.x, cube.y, cube.z, MapLayers.label(card),
 		winning_role.capitalize() if not winning_role.is_empty() else "unknown"
 	])
@@ -567,7 +574,7 @@ func show_built_tile(cube: Vector3i, card: Dictionary, winning_role: String = ""
 ## This shows what was actually hidden under each tile, exposing all lies
 func reveal_all_reality() -> void:
 	if map_layers == null:
-		print("HexField: No map_layers to reveal")
+		DebugLogger.log("HexField: No map_layers to reveal")
 		return
 
 	# Clear fog entirely
@@ -576,7 +583,7 @@ func reveal_all_reality() -> void:
 
 	# Get all reality tiles (single layer now)
 	_overlay_mgr.reveal_all_reality(self, map_layers.truth, Callable(self, "cube_outlines"))
-	print("HexField: Revealed all reality - %d tiles" % map_layers.truth.size())
+	DebugLogger.log("HexField: Revealed all reality - %d tiles" % map_layers.truth.size())
 
 
 ## Initialize map layers with optional deterministic seed.
@@ -585,7 +592,7 @@ func _init_map_layers(seed: int = -1) -> void:
 	var actual_seed := seed if seed >= 0 else int(Time.get_ticks_msec())
 	map_layers.init(actual_seed)
 	map_layers.init_center() # Center starts as A♥
-	print("HexField: map_layers initialized with seed=%d" % actual_seed)
+	DebugLogger.log("HexField: map_layers initialized with seed=%d" % actual_seed)
 
 
 ## Re-init map layers with a specific seed (used by demo for determinism).
@@ -593,7 +600,7 @@ func _init_map_layers(seed: int = -1) -> void:
 func reinit_map_layers(seed: int) -> void:
 	map_layers = MapLayers.new()
 	map_layers.generate(self, FIELD_RADIUS, seed)
-	print("HexField: map_layers regenerated with seed=%d" % seed)
+	DebugLogger.log("HexField: map_layers regenerated with seed=%d" % seed)
 
 
 ## Get a tile's reality card (simplified - no layer type needed)

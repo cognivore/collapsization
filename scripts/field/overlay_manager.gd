@@ -6,6 +6,7 @@ const MapLayers := preload("res://scripts/map_layers.gd")
 
 var outline_width := 6.0
 var glow_alpha := 0.45
+var debug_enabled := false
 
 var _visibility_nodes: Array[Node] = []
 var _nomination_overlays: Dictionary = {}
@@ -28,13 +29,23 @@ func clear_all() -> void:
 # ─────────────────────────────────────────────────────────────────────────────
 
 ## Calculate the center point of a polygon from its vertices
-func _calculate_center(points: Array[Vector2]) -> Vector2:
+## Public for testing
+func calculate_center(points: Array[Vector2]) -> Vector2:
 	if points.is_empty():
 		return Vector2.ZERO
 	var sum := Vector2.ZERO
 	for p in points:
 		sum += p
 	return sum / points.size()
+
+
+func _points_from_outlines(outlines: Array) -> Array[Vector2]:
+	if outlines.is_empty():
+		return []
+	var points: Array[Vector2] = []
+	for p in outlines[0]:
+		points.append(p)
+	return points
 
 
 ## Get label position at the CENTER of a triangular section of the hexagon
@@ -52,9 +63,12 @@ func _calculate_center(points: Array[Vector2]) -> Vector2:
 ##   TOP-RIGHT: v4 (top) + v5 (upper-right) → for INDUSTRY
 ##   BOTTOM-LEFT: v1 (bottom) + v2 (lower-left) → for URBANIST
 ##   CENTER → for BUILT tiles
-func _get_label_position(points: Array[Vector2], role_key: String) -> Vector2:
-	var center := _calculate_center(points)
+## Public for testing
+func get_label_position(points: Array[Vector2], role_key: String) -> Vector2:
+	var center := calculate_center(points)
 	if points.size() < 6:
+		if Engine.is_editor_hint() == false:
+			push_warning("OverlayManager: expected 6 hex vertices, got %d" % points.size())
 		return center
 
 	# Vertices go CLOCKWISE from TOP for pointy-top hex:
@@ -109,7 +123,7 @@ func _create_positioned_label(position: Vector2, text: String, font_color: Color
 
 ## Create a styled, centered label for hex overlays (for built tiles)
 func _create_centered_label(points: Array[Vector2], text: String, outline_color: Color, font_size: int = 22) -> Label:
-	var center := _calculate_center(points)
+	var center := calculate_center(points)
 	var label := _create_positioned_label(center, text, outline_color, font_size)
 	return label
 
@@ -217,9 +231,9 @@ func show_nomination(owner: Node2D, role_key: String, cube: Vector3i, color: Col
 	if outlines.is_empty():
 		return
 
-	var points: Array[Vector2] = []
-	for p in outlines[0]:
-		points.append(p)
+	var points: Array[Vector2] = _points_from_outlines(outlines)
+	if points.is_empty():
+		return
 
 	# Thicker outline for nominations
 	var outline := Line2D.new()
@@ -243,12 +257,25 @@ func show_nomination(owner: Node2D, role_key: String, cube: Vector3i, color: Col
 	var display_text := "?"
 	if not claimed_card.is_empty():
 		display_text = MapLayers.label(claimed_card)
-	var label_pos := _get_label_position(points, role_key)
+	var label_pos := get_label_position(points, role_key)
 	var label := _create_positioned_label(label_pos, display_text, color, 18)
 	label.z_index = 13
 	owner.add_child(label)
 
 	_nomination_overlays[role_key] = {"cube": cube, "outline": outline, "glow": glow, "label": label}
+
+
+## Convenience helper: compute outlines/color internally to decouple callers.
+func show_nomination_for_cube(owner: Node2D, role_key: String, cube: Vector3i, color_fn: Callable, outlines_fn: Callable, claimed_card: Dictionary = {}) -> void:
+	if not color_fn.is_valid() or not outlines_fn.is_valid():
+		return
+	# Create a properly typed Array[Vector3i] for cube_outlines
+	var cube_arr: Array[Vector3i] = [cube]
+	var outlines: Array = outlines_fn.call(cube_arr)
+	if outlines.is_empty():
+		return
+	var color: Color = color_fn.call(role_key, claimed_card)
+	show_nomination(owner, role_key, cube, color, outlines, claimed_card)
 
 
 func clear_nominations() -> void:
@@ -266,7 +293,8 @@ func persist_nomination(role_key: String) -> void:
 		# Move from temporary to permanent storage
 		_persisted_nominations[role_key + "_" + str(_nomination_overlays[role_key]["cube"])] = _nomination_overlays[role_key]
 		_nomination_overlays.erase(role_key)
-		print("OverlayManager: Persisted %s nomination" % role_key)
+		if debug_enabled:
+			print("OverlayManager: Persisted %s nomination" % role_key)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -277,9 +305,9 @@ func show_built(owner: Node2D, cube: Vector3i, color: Color, outlines: Array, ca
 	_clear_built_for(cube)
 	if outlines.is_empty():
 		return
-	var points: Array[Vector2] = []
-	for p in outlines[0]:
-		points.append(p)
+	var points: Array[Vector2] = _points_from_outlines(outlines)
+	if points.is_empty():
+		return
 
 	# Thick outline for built tiles
 	var outline := Line2D.new()
@@ -378,10 +406,9 @@ func show_reality(owner: Node2D, cube: Vector3i, outlines: Array, card: Dictiona
 		return # Already showing reality for this tile
 	if outlines.is_empty() or card.is_empty():
 		return
-
-	var points: Array[Vector2] = []
-	for p in outlines[0]:
-		points.append(p)
+	var points: Array[Vector2] = _points_from_outlines(outlines)
+	if points.is_empty():
+		return
 
 	# Get color based on suit - SPADES are red (danger!), others are white
 	var suit: int = card.get("suit", -1)
@@ -394,7 +421,7 @@ func show_reality(owner: Node2D, cube: Vector3i, outlines: Array, card: Dictiona
 		MapLayers.Suit.DIAMONDS:
 			label_color = Color(0.6, 0.9, 1.0, 1.0) # Cyan for diamonds
 
-	var label_pos := _get_label_position(points, "reality")
+	var label_pos := get_label_position(points, "reality")
 	var label := _create_positioned_label(label_pos, MapLayers.label(card), label_color, 16)
 	label.z_index = 25 # Above everything
 	owner.add_child(label)
@@ -412,4 +439,5 @@ func reveal_all_reality(owner: Node2D, truth_layer: Dictionary, outlines_fn: Cal
 		var cube_arr: Array[Vector3i] = [cube]
 		var outlines: Array = outlines_fn.call(cube_arr)
 		show_reality(owner, cube, outlines, card)
-	print("OverlayManager: Revealed reality for %d tiles" % truth_layer.size())
+	if debug_enabled:
+		print("OverlayManager: Revealed reality for %d tiles" % truth_layer.size())

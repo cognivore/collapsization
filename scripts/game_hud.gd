@@ -4,8 +4,8 @@ extends CanvasLayer
 const MapLayers := preload("res://scripts/map_layers.gd")
 const GameRules := preload("res://scripts/game_rules.gd")
 const ActionPanel := preload("res://scripts/ui/action_panel.gd")
-const InputRouter := preload("res://scripts/services/input_router.gd")
 const DebugHUD := preload("res://scripts/debug/debug_hud.gd")
+const DebugLogger := preload("res://scripts/debug/debug_logger.gd")
 
 # Hover shader for buttons
 var _button_hover_shader: Shader = preload("res://shaders/button_hover.gdshader")
@@ -25,13 +25,13 @@ const ROLE_NAMES := ["Mayor", "Industry Advisor", "Urbanist"]
 
 @export var game_manager_path: NodePath = NodePath("../GameManager")
 @export var hex_field_path: NodePath = NodePath("../HexField")
+@export var debug_logging: bool = false
 
 var _gm: Node # GameManager (duck-typed)
 var _hex_field: Node
 var _selected_card_index: int = -1
 var _selected_hex: Vector3i = INVALID_HEX
 var _action_panel := ActionPanel.new()
-var _input_router := InputRouter.new()
 
 # UI Root - tracks viewport size for proper resize handling
 @onready var _ui_root: Control = $UIRoot
@@ -45,6 +45,8 @@ var _input_router := InputRouter.new()
 @onready var _status_label: Label = $UIRoot/TopPanel/VBox/Status
 
 # Bottom panel
+@onready var _top_panel: MarginContainer = $UIRoot/TopPanel
+@onready var _bottom_panel: MarginContainer = $UIRoot/BottomPanel
 @onready var _hand_label: Label = $UIRoot/BottomPanel/CardPanel/VBox/HandLabel
 @onready var _hand_container: HBoxContainer = $UIRoot/BottomPanel/CardPanel/VBox/HandContainer
 @onready var _reveal_button: Button = $UIRoot/BottomPanel/CardPanel/VBox/ActionContainer/RevealButton
@@ -62,7 +64,7 @@ var _click_tween: Tween
 # Debug overlay
 var _debug_panel: Control
 var _debug_labels: Dictionary = {}
-var _debug_enabled := true
+var _debug_enabled := false
 var _last_click_screen: Vector2 = Vector2.ZERO
 var _last_click_world: Vector2 = Vector2.ZERO
 var _last_click_cube: Vector3i = Vector3i(0x7FFFFFFF, 0, 0)
@@ -71,15 +73,25 @@ var _last_input_summary: String = ""
 # Dynamic HUD outline (follows actual CardPanel position)
 var _hud_outline: Panel
 
+func _debug_log(msg: String) -> void:
+	if debug_logging:
+		print(msg)
+
+
+func _debug_warn(msg: String) -> void:
+	if debug_logging:
+		push_warning(msg)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # LIFECYCLE
 # ─────────────────────────────────────────────────────────────────────────────
 
 func _ready() -> void:
-	print("$$$ GameHud._ready() START $$$")
+	_debug_enabled = debug_logging
+	_debug_log("$$$ GameHud._ready() START $$$")
 	_bind_manager()
 	_bind_hex_field()
-	print("$$$ GameHud._ready() BOUND $$$")
+	_debug_log("$$$ GameHud._ready() BOUND $$$")
 
 	if _gm:
 		_connect_signals()
@@ -94,7 +106,7 @@ func _ready() -> void:
 
 	# Enable input processing
 	set_process_input(true)
-	print("GameHud: Input processing enabled: %s" % is_processing_input())
+	_debug_log("GameHud: Input processing enabled: %s" % is_processing_input())
 
 	# Handle viewport resize - UIRoot must track viewport size for proper UI positioning
 	get_viewport().size_changed.connect(_on_viewport_resized)
@@ -115,7 +127,7 @@ func _on_viewport_resized() -> void:
 	var vp_size := get_viewport().get_visible_rect().size
 	if _ui_root:
 		_ui_root.size = vp_size
-		print("GameHud: UIRoot resized to %s" % vp_size)
+		_debug_log("GameHud: UIRoot resized to %s" % vp_size)
 		# Log UI positions after layout update
 		call_deferred("_log_resize_positions")
 
@@ -124,10 +136,10 @@ func _log_resize_positions() -> void:
 	# Log positions after layout update for debugging
 	var bp := get_node_or_null("UIRoot/BottomPanel")
 	if bp:
-		print("GameHud: After resize - BottomPanel global_pos=%s size=%s" % [bp.global_position, bp.size])
+		_debug_log("GameHud: After resize - BottomPanel global_pos=%s size=%s" % [bp.global_position, bp.size])
 		for i in range(_card_buttons.size()):
 			var btn: Button = _card_buttons[i]
-			print("GameHud: After resize - CardButton[%d] global_pos=%s size=%s" % [i, btn.global_position, btn.size])
+			_debug_log("GameHud: After resize - CardButton[%d] global_pos=%s size=%s" % [i, btn.global_position, btn.size])
 
 
 func _init_click_indicator() -> void:
@@ -267,19 +279,19 @@ func _update_debug_overlay() -> void:
 
 
 func _log_ui_rects() -> void:
-	print("=== HUD UI RECTS ===")
-	print("  Viewport: %s" % get_viewport().get_visible_rect())
-	print("  Window: %s" % DisplayServer.window_get_size())
-	print("  UIRoot rect: %s" % _get_global_rect(_ui_root))
-	print("  BottomPanel rect: %s" % _get_global_rect($UIRoot/BottomPanel))
-	print("  CardPanel rect: %s" % _get_global_rect($UIRoot/BottomPanel/CardPanel))
-	print("  HandContainer rect: %s" % _get_global_rect(_hand_container))
-	print("  ActionContainer rect: %s" % _get_global_rect($UIRoot/BottomPanel/CardPanel/VBox/ActionContainer))
-	print("  RevealButton rect: %s, visible=%s" % [_get_global_rect(_reveal_button), _reveal_button.visible])
-	print("  BuildButton rect: %s, visible=%s" % [_get_global_rect(_build_button), _build_button.visible])
+	_debug_log("=== HUD UI RECTS ===")
+	_debug_log("  Viewport: %s" % get_viewport().get_visible_rect())
+	_debug_log("  Window: %s" % DisplayServer.window_get_size())
+	_debug_log("  UIRoot rect: %s" % _get_global_rect(_ui_root))
+	_debug_log("  BottomPanel rect: %s" % _get_global_rect($UIRoot/BottomPanel))
+	_debug_log("  CardPanel rect: %s" % _get_global_rect($UIRoot/BottomPanel/CardPanel))
+	_debug_log("  HandContainer rect: %s" % _get_global_rect(_hand_container))
+	_debug_log("  ActionContainer rect: %s" % _get_global_rect($UIRoot/BottomPanel/CardPanel/VBox/ActionContainer))
+	_debug_log("  RevealButton rect: %s, visible=%s" % [_get_global_rect(_reveal_button), _reveal_button.visible])
+	_debug_log("  BuildButton rect: %s, visible=%s" % [_get_global_rect(_build_button), _build_button.visible])
 	for i in range(_card_buttons.size()):
 		var btn: Button = _card_buttons[i]
-		print("  CardButton[%d] rect: %s, visible=%s, disabled=%s" % [
+		_debug_log("  CardButton[%d] rect: %s, visible=%s, disabled=%s" % [
 			i, _get_global_rect(btn), btn.visible, btn.disabled
 		])
 
@@ -291,16 +303,16 @@ func _get_global_rect(ctrl: Control) -> Rect2:
 
 
 func _bind_manager() -> void:
-	print("GameHud: _bind_manager called, path=%s, parent=%s" % [game_manager_path, get_parent()])
+	_debug_log("GameHud: _bind_manager called, path=%s, parent=%s" % [game_manager_path, get_parent()])
 	if game_manager_path != NodePath():
 		_gm = get_node_or_null(game_manager_path)
-		print("GameHud: get_node_or_null(%s) = %s" % [game_manager_path, _gm])
+		_debug_log("GameHud: get_node_or_null(%s) = %s" % [game_manager_path, _gm])
 	if _gm == null and get_parent():
 		_gm = get_parent().get_node_or_null("GameManager")
-		print("GameHud: fallback get_node_or_null = %s" % _gm)
+		_debug_log("GameHud: fallback get_node_or_null = %s" % _gm)
 	if _gm and _gm.has_signal("fog_updated"):
 		_gm.fog_updated.connect(_on_fog_updated)
-	print("GameHud: Final _gm = %s" % _gm)
+	_debug_log("GameHud: Final _gm = %s" % _gm)
 
 
 func _bind_hex_field() -> void:
@@ -313,16 +325,16 @@ func _bind_hex_field() -> void:
 
 
 func _connect_signals() -> void:
-	print("GameHud: Connecting signals to GameManager")
+	_debug_log("GameHud: Connecting signals to GameManager")
 	if _gm.has_signal("phase_changed"):
 		_gm.phase_changed.connect(_on_phase_changed)
-		print("GameHud: Connected phase_changed")
+		_debug_log("GameHud: Connected phase_changed")
 	if _gm.has_signal("hand_updated"):
 		_gm.hand_updated.connect(_on_hand_updated)
-		print("GameHud: Connected hand_updated")
+		_debug_log("GameHud: Connected hand_updated")
 	if _gm.has_signal("nominations_updated"):
 		_gm.nominations_updated.connect(_on_nominations_updated)
-		print("GameHud: Connected nominations_updated")
+		_debug_log("GameHud: Connected nominations_updated")
 	if _gm.has_signal("commits_updated"):
 		_gm.commits_updated.connect(_on_commits_updated)
 	if _gm.has_signal("scores_updated"):
@@ -335,7 +347,7 @@ func _connect_signals() -> void:
 		_gm.player_count_changed.connect(_on_player_count_changed)
 	if _gm.has_signal("placement_resolved"):
 		_gm.placement_resolved.connect(_on_placement_resolved)
-		print("GameHud: Connected placement_resolved")
+		_debug_log("GameHud: Connected placement_resolved")
 
 
 func _refresh_all() -> void:
@@ -350,7 +362,7 @@ func _refresh_all() -> void:
 # ─────────────────────────────────────────────────────────────────────────────
 
 func _on_phase_changed(phase: int) -> void:
-	print("GameHud: Phase changed to %d" % phase)
+	_debug_log("GameHud: Phase changed to %d" % phase)
 	var phase_name: String = PHASE_NAMES[phase] if phase < PHASE_NAMES.size() else "?"
 	_phase_label.text = "Phase: %s" % phase_name
 
@@ -378,7 +390,7 @@ func _on_hand_updated(hand: Array, revealed_index: int) -> void:
 
 
 func _on_nominations_updated(nominations: Dictionary) -> void:
-	print("GameHud: Nominations updated - %s" % nominations)
+	_debug_log("GameHud: Nominations updated - %s" % nominations)
 
 	# New format: {role: {hex: Vector3i, claim: Dictionary}}
 	var entries: Array[String] = []
@@ -476,7 +488,7 @@ func _on_placement_resolved(_turn_idx: int, placement: Dictionary) -> void:
 	# Show built tile on map (winning advisor's claim persists)
 	if _hex_field and _hex_field.has_method("show_built_tile"):
 		_hex_field.show_built_tile(cube, card, winning_role)
-		print("GameHud: Showing built tile at (%d,%d,%d) by %s" % [
+		_debug_log("GameHud: Showing built tile at (%d,%d,%d) by %s" % [
 			cube.x, cube.y, cube.z, winning_role if not winning_role.is_empty() else "unknown"
 		])
 
@@ -610,7 +622,7 @@ func _add_hover_glow_overlay(btn: Button, _index: int) -> void:
 
 
 func _on_card_hover_entered(btn: Button, glow: ColorRect, mat: ShaderMaterial) -> void:
-	print("GameHud: Card hover ENTERED - %s" % btn.name)
+	_debug_log("GameHud: Card hover ENTERED - %s" % btn.name)
 	mat.set_shader_parameter("enabled", true)
 	glow.color = Color(1.0, 1.0, 1.0, 0.15)
 
@@ -620,7 +632,7 @@ func _on_card_hover_entered(btn: Button, glow: ColorRect, mat: ShaderMaterial) -
 
 
 func _on_card_hover_exited(btn: Button, glow: ColorRect, mat: ShaderMaterial) -> void:
-	print("GameHud: Card hover EXITED - %s" % btn.name)
+	_debug_log("GameHud: Card hover EXITED - %s" % btn.name)
 
 	# Animate glow out
 	var tween := create_tween()
@@ -629,22 +641,22 @@ func _on_card_hover_exited(btn: Button, glow: ColorRect, mat: ShaderMaterial) ->
 
 
 func _on_card_gui_input(event: InputEvent, index: int) -> void:
-	print("GameHud: Card %d gui_input event: %s" % [index, event])
+	_debug_log("GameHud: Card %d gui_input event: %s" % [index, event])
 	if event is InputEventMouseButton:
-		print("GameHud: Card %d MouseButton: pressed=%s, button=%d" % [index, event.pressed, event.button_index])
+		_debug_log("GameHud: Card %d MouseButton: pressed=%s, button=%d" % [index, event.pressed, event.button_index])
 		if event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-			print("GameHud: Card %d LEFT CLICK DETECTED!" % index)
+			_debug_log("GameHud: Card %d LEFT CLICK DETECTED!" % index)
 			_on_card_button_pressed(index)
 
 
 func _on_card_button_pressed(index: int) -> void:
-	print("GameHud: Card %d button pressed!" % index)
+	_debug_log("GameHud: Card %d button pressed!" % index)
 	if _selected_card_index == index:
 		_selected_card_index = -1
-		print("GameHud: Deselected card")
+		_debug_log("GameHud: Deselected card")
 	else:
 		_selected_card_index = index
-		print("GameHud: Selected card %d" % index)
+		_debug_log("GameHud: Selected card %d" % index)
 
 	if _gm:
 		_rebuild_card_buttons(_gm.hand, _gm.revealed_index)
@@ -729,11 +741,11 @@ func _update_role_label() -> void:
 
 func _update_status_for_phase(phase: int) -> void:
 	if _gm == null:
-		print("GameHud: _gm is null in _update_status_for_phase")
+		_debug_log("GameHud: _gm is null in _update_status_for_phase")
 		return
 
 	var role: int = _gm.local_role
-	print("GameHud: Updating status for phase=%d, role=%d" % [phase, role])
+	_debug_log("GameHud: Updating status for phase=%d, role=%d" % [phase, role])
 
 	match phase:
 		0: # LOBBY
@@ -760,13 +772,9 @@ func _update_status_for_phase(phase: int) -> void:
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
-		push_warning("GameHud: _input MouseButton: button=%d, pressed=%s, position=%s" % [
-			mb.button_index, mb.pressed, mb.position
-		])
 		_last_input_summary = "MB%d %s" % [mb.button_index, "DOWN" if mb.pressed else "UP"]
-		# Use _is_click_in_hud_area which checks BottomPanel/TopPanel bounds,
-		# not _ui_root which fills entire viewport
-		if _is_click_in_hud_area(event.position):
+		# Check against actual visible panels, not full-screen UIRoot
+		if _is_click_on_hud_panels(mb.position):
 			_handle_hud_mouse_button(event)
 		else:
 			_handle_world_mouse_button(event)
@@ -778,7 +786,7 @@ func _input(event: InputEvent) -> void:
 
 	if event is InputEventKey and event.pressed:
 		var ke := event as InputEventKey
-		print("GameHud: Key pressed: %s" % ke.as_text())
+		_debug_log("GameHud: Key pressed: %s" % ke.as_text())
 		_last_input_summary = "KEY %s" % ke.as_text()
 
 		match ke.keycode:
@@ -798,8 +806,18 @@ func _input(event: InputEvent) -> void:
 				_on_cancel_pressed()
 			KEY_F3:
 				_debug_enabled = not _debug_enabled
+				DebugLogger.enabled = _debug_enabled
 				if _debug_panel:
 					_debug_panel.visible = _debug_enabled
+
+
+## Check if click position is within any visible HUD panel
+func _is_click_on_hud_panels(screen_pos: Vector2) -> bool:
+	if _top_panel and _top_panel.get_global_rect().has_point(screen_pos):
+		return true
+	if _bottom_panel and _bottom_panel.get_global_rect().has_point(screen_pos):
+		return true
+	return false
 
 
 func _handle_hud_mouse_button(event: InputEvent) -> void:
@@ -846,16 +864,16 @@ func _record_click_coordinates(screen_pos: Vector2) -> void:
 
 
 func _log_card_button_positions() -> void:
-	print("=== Card Button Positions ===")
+	_debug_log("=== Card Button Positions ===")
 	for i in range(_card_buttons.size()):
 		var btn: Button = _card_buttons[i]
 		var rect := Rect2(btn.global_position, btn.size)
-		print("  CardButton[%d] global_pos=%s size=%s rect=%s" % [i, btn.global_position, btn.size, rect])
+		_debug_log("  CardButton[%d] global_pos=%s size=%s rect=%s" % [i, btn.global_position, btn.size, rect])
 	# Also log action buttons
-	print("=== Action Button Positions ===")
-	print("  RevealButton: global_pos=%s size=%s visible=%s" % [_reveal_button.global_position, _reveal_button.size, _reveal_button.visible])
-	print("  CommitButton: global_pos=%s size=%s visible=%s" % [_commit_button.global_position, _commit_button.size, _commit_button.visible])
-	print("  BuildButton: global_pos=%s size=%s visible=%s" % [_build_button.global_position, _build_button.size, _build_button.visible])
+	_debug_log("=== Action Button Positions ===")
+	_debug_log("  RevealButton: global_pos=%s size=%s visible=%s" % [_reveal_button.global_position, _reveal_button.size, _reveal_button.visible])
+	_debug_log("  CommitButton: global_pos=%s size=%s visible=%s" % [_commit_button.global_position, _commit_button.size, _commit_button.visible])
+	_debug_log("  BuildButton: global_pos=%s size=%s visible=%s" % [_build_button.global_position, _build_button.size, _build_button.visible])
 
 
 func _try_click_card_button(click_pos: Vector2) -> bool:
@@ -865,7 +883,7 @@ func _try_click_card_button(click_pos: Vector2) -> bool:
 		var btn: Button = _card_buttons[i]
 		var rect := Rect2(btn.global_position, btn.size)
 		if rect.has_point(click_pos):
-			print("GameHud: Manual hit test - click at %s hit CardButton[%d] rect=%s" % [click_pos, i, rect])
+			_debug_log("GameHud: Manual hit test - click at %s hit CardButton[%d] rect=%s" % [click_pos, i, rect])
 			_on_card_button_pressed(i)
 			return true
 
@@ -884,7 +902,7 @@ func _try_click_card_button(click_pos: Vector2) -> bool:
 		if btn and btn.visible and not btn.disabled:
 			var rect := Rect2(btn.global_position, btn.size)
 			if rect.has_point(click_pos):
-				print("GameHud: Manual hit test - click at %s hit %s rect=%s" % [click_pos, btn.text, rect])
+				_debug_log("GameHud: Manual hit test - click at %s hit %s rect=%s" % [click_pos, btn.text, rect])
 				call(method)
 				return true
 
@@ -897,7 +915,7 @@ func _select_card(index: int) -> void:
 		return
 	if index < 0 or index >= _gm.hand.size():
 		return
-	print("GameHud: Keyboard selected card %d" % index)
+	_debug_log("GameHud: Keyboard selected card %d" % index)
 	_selected_card_index = index
 	_rebuild_card_buttons(_gm.hand, _gm.revealed_index)
 	_update_ui()

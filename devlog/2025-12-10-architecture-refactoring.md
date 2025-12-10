@@ -1,8 +1,12 @@
 # Architecture Refactoring: From Monoliths to Modules
 
 **Date:** December 10, 2025
-**Commit:** e8a73aa
+**Initial Commit:** e8a73aa
 **Files changed:** 18 (+2142 / -783 lines)
+
+**Follow-up Session:** Same day
+**Additional changes:** 17 files (+544 / -314 lines)
+**Test coverage:** 76 tests across 7 test scripts
 
 ## The Problem
 
@@ -29,7 +33,9 @@ scripts/game/phases/
 
 Each phase handler encapsulates entry conditions, valid actions, and exit transitions. The main `GameManager` now delegates to these handlers rather than containing massive switch statements.
 
-**Reality check:** The new phase scripts exist but are not wired in. `GameManager._transition_to()` still calls `_enter_draw_phase()/_enter_nominate_phase()/_enter_place_phase()` defined on `GameManager` itself; nothing instantiates or calls `DrawPhase`, `NominatePhase`, or `PlacePhase`. We now have duplicated phase logic (the phase classes vs. the `_enter_*` methods), and they are already diverging (e.g., DrawPhase uses `INVALID_HEX` sentinels while `GameManager` uses empty dictionaries). Until we actually delegate to these classes, this extraction is just dead code plus drift risk.
+**Addressed:** Phase handlers are now wired in. `GameManager._init_phase_handlers()` instantiates `DrawPhase`, `NominatePhase`, and `PlacePhase` into a `_phase_handlers` dictionary. The `_transition_to()` method calls `_phase_handlers[phase].enter(self)` for phase entry. Public action methods (`reveal_card`, `commit_nomination`, `place_card`) delegate to the respective handler's methods. Unit tests (`test_draw_phase_resets_nominations`, `test_commit_uses_claim_and_waits_for_both`, `test_place_phase_marks_built_and_scores`) verify that phase transitions and state mutations work through the handlers.
+
+**Accepted trade-off:** The phase handlers receive the full `GameManager` reference and call back into it (`gm._reset_nominations_state()`, `gm._transition_to()`, etc.), creating bidirectional coupling. A cleaner design would have handlers return commands/events that `GameManager` interprets, but that's a larger refactor. The current approach works and is tested—we're accepting pragmatic coupling over architectural purity.
 
 ### Field Overlay Manager
 
@@ -48,27 +54,37 @@ The overlay manager now owns:
 - Reality labels (revealed at game over)
 - Proper z-index layering for all elements
 
-**Reality check:** Overlay logic did move out of `hex_field.gd`, but `overlay_manager.gd` is ~400 lines and `hex_field.gd` is still ~600 lines of click handling, logging, and overlay coordination. `FieldOverlayManager` also relies on callers to precompute outlines and colors, so coupling remains: geometry, suit coloring, and claim labels are still assembled in `hex_field.gd`. There are no tests for the triangle math or label placement, so regressions would still only show up visually. Net effect: we relocated the mess, not fully simplified it.
+**Addressed:** We added `show_nomination_for_cube()` which accepts a cube coordinate and `Callable` references for color and outline computation. This shifts responsibility: `hex_field.gd` passes `_nomination_color` and `cube_outlines` callables, and `FieldOverlayManager` calls them internally. The coupling is now via interface (callables) rather than precomputed data.
+
+A subtle bug was caught here: GDScript's typed arrays are strict, so passing `[cube]` (untyped `Array`) to a callable expecting `Array[Vector3i]` caused runtime errors. Fixed by explicitly typing: `var cube_arr: Array[Vector3i] = [cube]`. Regression test `test_nomination_overlay_renders_without_type_error` exercises this path.
+
+**Now tested:** Triangle math and label positioning now have unit tests in `tests/unit/test_overlay_manager.gd`:
+- `test_calculate_center_regular_hex` — verifies center calculation
+- `test_get_label_position_industry/urbanist/reality` — verifies triangle centroids for each role
+- `test_label_positions_are_distinct` — ensures labels don't overlap
+
+The `calculate_center()` and `get_label_position()` methods were made public for testability. Total: 8 overlay tests.
 
 ### Service Layer
 
-Input handling was a disaster. Mouse clicks could target the HUD or the game world, but the routing logic was duplicated and buggy. We introduced:
-
-```
-scripts/services/
-└── input_router.gd  # Mediates HUD vs world clicks
-```
-
-Similarly, UI button visibility depended on complex state checks scattered across `game_hud.gd`:
+Input handling was a disaster. Mouse clicks could target the HUD or the game world, but the routing logic was duplicated and buggy.
 
 ```
 scripts/ui/
 └── action_panel.gd  # Button state management
 ```
 
-**Reality check (input routing):** `InputRouter` is constructed in `game_hud.gd` but never used. Click routing still happens in `_input` via bespoke HUD-bounds checks, so the original duplication and CanvasLayer quirks remain. We need to either wire `route_mouse_event()` into `_input`/`_unhandled_input` or drop the helper.
+**Addressed:** Input routing is now functional via a simpler inline solution. The root bug was that `_ui_root.size = vp_size` made `UIRoot` cover the entire viewport, so every click was swallowed by the HUD handler, preventing hex selection entirely.
 
-**Reality check (action panel):** `ActionPanel.compute_state/apply_state` is actually used in `_update_ui`, so button visibility/enablement is centralized. However, the surrounding HUD logic (selection resets, status text, click handling) is still sprawled across `game_hud.gd` with heavy logging and no tests. We reduced one knot of conditionals but did not meaningfully shrink the HUD module.
+The fix: `game_hud.gd` now holds explicit references to `_top_panel` and `_bottom_panel`, and `_is_click_on_hud_panels()` checks whether the click falls within either panel's `get_global_rect()`. Clicks outside these regions route to `_handle_world_mouse_button()`, which calls `_hex_field.handle_external_click()`. Regression test `test_hud_click_routing_allows_world_clicks` verifies that center-screen clicks are NOT captured by HUD panels.
+
+**Cleaned up:** The `InputRouter` class was deleted entirely. It was instantiated but never called—dead code from an abandoned approach. The inline `_is_click_on_hud_panels()` is simpler and actually works.
+
+**Now tested:** `ActionPanel.compute_state()` has 14 unit tests in `tests/unit/test_action_panel.gd`:
+- Mayor DRAW phase: REVEAL visible, BUILD hidden
+- Mayor PLACE phase: BUILD enabled with card+hex selected
+- Advisor NOMINATE phase: COMMIT visible with hex selected
+- Edge cases: disabled states, action card visibility
 
 ### Debug Infrastructure
 
@@ -76,10 +92,25 @@ Debug overlays were hardcoded into `game_hud.gd`. We extracted a reusable compon
 
 ```
 scripts/debug/
-└── debug_hud.gd  # Configurable debug overlay panel
+├── debug_hud.gd     # Configurable debug overlay panel
+└── debug_logger.gd  # Centralized logging with global toggle
 ```
 
-**Reality check:** `DebugHUD` is reusable and lightweight, but it ships always-on debug behavior: `_debug_enabled` defaults to true and `game_hud.gd` is peppered with `print`/`push_warning` calls. There's no build-time or runtime toggle to silence it outside of manual code edits, so production noise risk remains.
+**Fully addressed:** A new `DebugLogger` singleton provides project-wide log control:
+
+```gdscript
+class_name DebugLogger
+static var enabled: bool = false
+
+static func log(msg: String) -> void:
+    if enabled: print(msg)
+```
+
+All verbose output now routes through `DebugLogger.log()`:
+- `hex_field.gd` — 24 print statements converted
+- `game_manager.gd` — 13 print statements converted
+
+The F3 key toggles `DebugLogger.enabled` alongside the debug panel visibility. Production builds are now silent by default.
 
 ### Network Protocol
 
@@ -90,7 +121,51 @@ scripts/game/
 └── game_protocol.gd  # Network serialization helpers
 ```
 
-**Reality check:** `GameProtocol` is used for serializing nominations/placements, which is good, but the rest of the network/state payloads are still built inline in `GameManager._broadcast_state()` and intent handlers. Claim validation and role/peer mapping also remain in `GameManager`, so the protocol layer only covers a thin slice of the data model. Without tests, there's still a risk of shape drift between sender/receiver.
+**Fully addressed:** `GameProtocol` now provides comprehensive serialization AND validation:
+
+Serialization helpers:
+- `serialize_nominations()` / `deserialize_nominations()`
+- `serialize_placement()` / `deserialize_placement()`
+- `serialize_built_hexes()` / `deserialize_built_hexes()`
+- `serialize_hand_for_role()`, `serialize_visibility_entry()`
+
+Validation helpers (new):
+- `validate_card()` — checks suit and rank fields
+- `validate_serialized_nomination()` — validates hex array and claim
+- `validate_serialized_placement()` — validates cube array and card
+- `validate_role()` — checks role is 0/1/2
+
+**Now tested:** 16 protocol tests including round-trip verification:
+- `test_nominations_round_trip` — serialize → deserialize → compare
+- `test_placement_round_trip` — full cycle with turn, card, cube
+- `test_built_hexes_round_trip` — Array[Vector3i] preservation
+- Validation tests for malformed payloads
+
+## The Bug Hunt
+
+The initial refactoring introduced two critical bugs that broke the game entirely:
+
+### Bug 1: Typed Array Mismatch
+
+**Symptom:** Nomination overlays disappeared. No visual feedback when advisors committed.
+
+**Root cause:** `show_nomination_for_cube()` passed `[cube]` to a callable expecting `Array[Vector3i]`. GDScript's typed arrays are strict—the untyped `Array` literal failed at runtime.
+
+**Fix:** Explicit typing: `var cube_arr: Array[Vector3i] = [cube]`
+
+**Test:** `test_nomination_overlay_renders_without_type_error`
+
+### Bug 2: Full-Screen HUD Capture
+
+**Symptom:** Clicking hexes did nothing. BUILD phase completely broken.
+
+**Root cause:** `_ui_root.size = vp_size` made the Control cover the entire viewport. The `_is_in_hud()` check always returned true, so every click was captured by the HUD handler and never reached `handle_external_click()`.
+
+**Fix:** Check against actual visible panels (`_top_panel`, `_bottom_panel`) instead of the full-screen UIRoot.
+
+**Test:** `test_hud_click_routing_allows_world_clicks`
+
+These bugs highlighted a critical gap: our unit tests created `GameManager` with minimal stubs, never exercising the real `HexField` overlay code or HUD click routing. The E2E tests now include regression coverage for these integration points.
 
 ## The Nomination Data Model
 
@@ -192,6 +267,19 @@ We needed labels in specific triangles:
 
 The addon returns vertices clockwise from TOP, which we discovered through debug logging after multiple failed attempts assuming counter-clockwise or starting from RIGHT.
 
+## Test Coverage Summary
+
+| Test File | Tests | Purpose |
+|-----------|-------|---------|
+| `test_game_rules.gd` | 17 | E2E game loop, scoring, phases |
+| `test_game_manager.gd` | 5 | Phase transitions, nominations |
+| `test_game_protocol.gd` | 16 | Serialization, validation, round-trips |
+| `test_action_panel.gd` | 14 | Button state logic |
+| `test_overlay_manager.gd` | 8 | Triangle math, label positioning |
+| `test_hex_coordinate.gd` | 8 | Hex grid math |
+| `test_input_coordinates.gd` | 8 | Click coordinate transforms |
+| **Total** | **76** | |
+
 ## Lessons Learned
 
 1. **Extract early, extract often.** The 800-line files should have been split at 400 lines.
@@ -204,6 +292,22 @@ The addon returns vertices clockwise from TOP, which we discovered through debug
 
 5. **Scoring rules are subtle.** "Mayor scores if they picked optimally" sounds simple, but defining "optimal" requires careful thought about ties, suit matching, and edge cases.
 
+6. **Typed arrays are strict.** GDScript won't coerce `[x]` to `Array[T]`. Always explicitly type array literals when passing to typed parameters.
+
+7. **Full-screen Controls are traps.** A Control with `size = viewport_size` captures ALL clicks. Always check against actual visible UI bounds.
+
+8. **Dead code rots.** The `InputRouter` class was "ready for later" but never used. Delete it or use it—don't let it linger.
+
+## What's Done
+
+- Phase delegation with unit tests
+- Overlay manager with callable interface and geometry tests
+- Input routing that actually works (with regression test)
+- Centralized debug logging via `DebugLogger`
+- Protocol validation helpers with round-trip tests
+- ActionPanel button state tests
+- 76 tests total, all passing
+
 ## What's Next
 
 - Multiplayer testing with the new nomination/claim system
@@ -211,5 +315,4 @@ The addon returns vertices clockwise from TOP, which we discovered through debug
 - Balance tuning for bot AI strategies
 - Sound effects for game events
 
-The codebase is now structured to support these changes without architectural surgery.
-
+The codebase is now structured to support these changes without architectural surgery. More importantly, it has tests to catch regressions when we inevitably break something.

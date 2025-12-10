@@ -427,8 +427,10 @@ static func is_spade(card: Dictionary) -> bool:
 
 ## Check if a hex was nominated by either advisor
 static func is_nominated_hex(hex: Vector3i, nominations: Dictionary) -> bool:
-	var industry_hex: Vector3i = nominations.get("industry", INVALID_HEX)
-	var urbanist_hex: Vector3i = nominations.get("urbanist", INVALID_HEX)
+	var industry_entry: Dictionary = nominations.get("industry", {})
+	var urbanist_entry: Dictionary = nominations.get("urbanist", {})
+	var industry_hex: Vector3i = industry_entry.get("hex", INVALID_HEX) if not industry_entry.is_empty() else INVALID_HEX
+	var urbanist_hex: Vector3i = urbanist_entry.get("hex", INVALID_HEX) if not urbanist_entry.is_empty() else INVALID_HEX
 	return hex == industry_hex or hex == urbanist_hex
 
 
