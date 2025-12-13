@@ -525,11 +525,11 @@ func _visibility_payload_for_role(role: Role) -> Array:
 	if _hex_field == null or _hex_field.map_layers == null:
 		return []
 
-	# Advisors don't see visibility (Mayor doesn't get visibility at all)
+	# Mayor doesn't see reality at all
 	if role == Role.MAYOR:
 		return []
 
-	# Advisors (Industry and Urbanist) see all tiles on the playable frontier
+	# Advisors see all tiles on the playable frontier
 	# The frontier = all hexes adjacent to any built hex
 	var result: Array = []
 	var frontier: Array[Vector3i] = GameRules.get_playable_frontier(built_hexes)

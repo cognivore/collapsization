@@ -247,7 +247,8 @@ func test_scoring_awards_mayor_for_optimal_guess() -> void:
 	assert_true(_gm.scores["mayor"] >= initial_mayor_score, "Mayor score should not decrease")
 
 
-## Test 9: Scoring uses distance-to-reality (Queen♥ vs 2♥ / 10♦ example)
+## Test 9: Scoring uses distance-to-reality with suit-match requirement
+## New rules: Mayor must match suit to score. Distance = |value_diff| if suits match, else -1 (no score)
 func test_scoring_distance_prefers_closest_reality() -> void:
 	_gm.game_seed = TEST_SEED
 	_gm.start_singleplayer()
@@ -267,7 +268,7 @@ func test_scoring_distance_prefers_closest_reality() -> void:
 	_hex_field.map_layers.truth[urbanist_hex] = MapLayers.make_card(MapLayers.Suit.HEARTS, "2")
 	_hex_field.map_layers.truth[industry_hex] = MapLayers.make_card(MapLayers.Suit.DIAMONDS, "10")
 
-	# Nominations (claims don't affect scoring; use requested example)
+	# Nominations (claims don't affect Mayor scoring but do affect advisor tie-break)
 	_gm.nominations["urbanist"] = {"hex": urbanist_hex, "claim": MapLayers.make_card(MapLayers.Suit.HEARTS, "K")}
 	_gm.nominations["industry"] = {"hex": industry_hex, "claim": MapLayers.make_card(MapLayers.Suit.DIAMONDS, "J")}
 	_gm.phase = GameManager.Phase.PLACE
@@ -275,13 +276,153 @@ func test_scoring_distance_prefers_closest_reality() -> void:
 	# Place Q♥ on urbanist hex
 	_gm.place_card(0, urbanist_hex)
 
-	# Distances: Q♥->2♥ = 11, Q♥->10♦ = 4 => mayor should NOT score; urbanist scores only
-	assert_eq(_gm.scores["mayor"], 0, "Mayor should not score when picking farther reality")
+	# New scoring:
+	# - Q♥ vs 2♥ (urbanist hex): suits match, distance = |13-2| = 11 (valid)
+	# - Q♥ vs 10♦ (industry hex): suits don't match, distance = -1 (invalid)
+	# Mayor scores because 11 is the minimum valid distance (only valid option)
+	assert_eq(_gm.scores["mayor"], 1, "Mayor should score when suit matches reality")
 	assert_eq(_gm.scores["urbanist"], 1, "Urbanist should score when their hex is chosen")
 	assert_eq(_gm.scores["industry"], 0, "Industry should not score when their hex not chosen")
 
 
-## Test 9: Fog reveals center and ring on game start
+## Test 9b: Spade placement - Mayor doesn't score but advisor with closest claim does
+func test_spade_placement_advisor_still_scores() -> void:
+	_gm.game_seed = TEST_SEED
+	_gm.start_singleplayer()
+
+	# Mayor will place A♠ (Ace of Spades)
+	_gm.hand = [MapLayers.make_card(MapLayers.Suit.SPADES, "A")]
+	_gm.revealed_index = 0
+
+	# Progress to PLACE phase
+	_gm.reveal_card(0)
+
+	# Define hexes
+	var industry_hex := Vector3i(1, -1, 0)
+	var urbanist_hex := Vector3i(0, 1, -1)
+
+	# Reality doesn't matter for this test (not spades so game continues)
+	_hex_field.map_layers.truth[industry_hex] = MapLayers.make_card(MapLayers.Suit.DIAMONDS, "Q")
+	_hex_field.map_layers.truth[urbanist_hex] = MapLayers.make_card(MapLayers.Suit.HEARTS, "2")
+
+	# Claims: Industry claims Q♠ (value 13), Urbanist claims 5♠ (value 5)
+	# Mayor places A♠ (value 14)
+	# Industry claim |13-14| = 1 is closer than Urbanist |5-14| = 9
+	_gm.nominations["industry"] = {"hex": industry_hex, "claim": MapLayers.make_card(MapLayers.Suit.SPADES, "Q")}
+	_gm.nominations["urbanist"] = {"hex": urbanist_hex, "claim": MapLayers.make_card(MapLayers.Suit.SPADES, "5")}
+	_gm.phase = GameManager.Phase.PLACE
+
+	# Place A♠ on industry hex
+	_gm.place_card(0, industry_hex)
+
+	# Spade placement: Mayor gets 0, advisor with closest claim value scores
+	assert_eq(_gm.scores["mayor"], 0, "Mayor should not score when placing Spade")
+	assert_eq(_gm.scores["industry"], 1, "Industry should score (their hex chosen)")
+	assert_eq(_gm.scores["urbanist"], 0, "Urbanist should not score (their hex not chosen)")
+
+
+## Test 9c: Same-hex tie-break uses claim value proximity to placed card
+func test_same_hex_tiebreak_by_claim_value() -> void:
+	_gm.game_seed = TEST_SEED
+	_gm.start_singleplayer()
+
+	# Mayor will place 10♦
+	_gm.hand = [MapLayers.make_card(MapLayers.Suit.DIAMONDS, "10")]
+	_gm.revealed_index = 0
+
+	# Progress to PLACE phase
+	_gm.reveal_card(0)
+
+	# Both advisors nominate the same hex
+	var shared_hex := Vector3i(1, -1, 0)
+
+	# Reality at shared hex is 10♦ (exact match for Mayor)
+	_hex_field.map_layers.truth[shared_hex] = MapLayers.make_card(MapLayers.Suit.DIAMONDS, "10")
+
+	# Industry claims 8♦ (value 8), Urbanist claims K♦ (value 12)
+	# Mayor places 10♦ (value 10)
+	# Industry |8-10| = 2 is closer than Urbanist |12-10| = 2 ... equal!
+	# Tie-break: Industry claim suit (♦) matches placed suit (♦), so Industry wins
+	_gm.nominations["industry"] = {"hex": shared_hex, "claim": MapLayers.make_card(MapLayers.Suit.DIAMONDS, "8")}
+	_gm.nominations["urbanist"] = {"hex": shared_hex, "claim": MapLayers.make_card(MapLayers.Suit.DIAMONDS, "K")}
+	_gm.phase = GameManager.Phase.PLACE
+
+	# Place 10♦ on shared hex
+	_gm.place_card(0, shared_hex)
+
+	# Mayor scores (exact match: distance = 0), Industry wins tie-break
+	assert_eq(_gm.scores["mayor"], 1, "Mayor should score (exact suit+value match)")
+	assert_eq(_gm.scores["industry"], 1, "Industry should win tie-break (suit matches placed)")
+	assert_eq(_gm.scores["urbanist"], 0, "Urbanist should lose tie-break")
+
+
+## Test 9d: Same-hex tie-break with different claim value distances
+func test_same_hex_tiebreak_closer_value_wins() -> void:
+	_gm.game_seed = TEST_SEED
+	_gm.start_singleplayer()
+
+	# Mayor will place 7♥
+	_gm.hand = [MapLayers.make_card(MapLayers.Suit.HEARTS, "7")]
+	_gm.revealed_index = 0
+
+	# Progress to PLACE phase
+	_gm.reveal_card(0)
+
+	# Both advisors nominate the same hex
+	var shared_hex := Vector3i(1, -1, 0)
+
+	# Reality at shared hex is 7♥ (exact match for Mayor)
+	_hex_field.map_layers.truth[shared_hex] = MapLayers.make_card(MapLayers.Suit.HEARTS, "7")
+
+	# Industry claims 2♥ (value 2), Urbanist claims 6♥ (value 6)
+	# Mayor places 7♥ (value 7)
+	# Industry |2-7| = 5, Urbanist |6-7| = 1
+	# Urbanist is closer, wins the point
+	_gm.nominations["industry"] = {"hex": shared_hex, "claim": MapLayers.make_card(MapLayers.Suit.HEARTS, "2")}
+	_gm.nominations["urbanist"] = {"hex": shared_hex, "claim": MapLayers.make_card(MapLayers.Suit.HEARTS, "6")}
+	_gm.phase = GameManager.Phase.PLACE
+
+	# Place 7♥ on shared hex
+	_gm.place_card(0, shared_hex)
+
+	# Mayor scores (exact match), Urbanist wins (closer claim)
+	assert_eq(_gm.scores["mayor"], 1, "Mayor should score (exact suit+value match)")
+	assert_eq(_gm.scores["industry"], 0, "Industry should lose (farther claim value)")
+	assert_eq(_gm.scores["urbanist"], 1, "Urbanist should win (closer claim value)")
+
+
+## Test 9e: Mayor cannot score when suit mismatches reality
+func test_mayor_no_score_on_suit_mismatch() -> void:
+	_gm.game_seed = TEST_SEED
+	_gm.start_singleplayer()
+
+	# Mayor will place 10♦
+	_gm.hand = [MapLayers.make_card(MapLayers.Suit.DIAMONDS, "10")]
+	_gm.revealed_index = 0
+
+	# Progress to PLACE phase
+	_gm.reveal_card(0)
+
+	var target_hex := Vector3i(1, -1, 0)
+	var other_hex := Vector3i(0, 1, -1)
+
+	# Reality at target is 10♥ (same value but different suit!)
+	_hex_field.map_layers.truth[target_hex] = MapLayers.make_card(MapLayers.Suit.HEARTS, "10")
+	_hex_field.map_layers.truth[other_hex] = MapLayers.make_card(MapLayers.Suit.DIAMONDS, "2")
+
+	_gm.nominations["industry"] = {"hex": target_hex, "claim": MapLayers.make_card(MapLayers.Suit.DIAMONDS, "10")}
+	_gm.nominations["urbanist"] = {"hex": other_hex, "claim": MapLayers.make_card(MapLayers.Suit.DIAMONDS, "2")}
+	_gm.phase = GameManager.Phase.PLACE
+
+	# Place 10♦ on target_hex (reality is 10♥ - suit mismatch!)
+	_gm.place_card(0, target_hex)
+
+	# Mayor cannot score (suit mismatch), but Industry scores (their hex chosen)
+	assert_eq(_gm.scores["mayor"], 0, "Mayor should NOT score when suit mismatches reality")
+	assert_eq(_gm.scores["industry"], 1, "Industry should score (their hex was chosen)")
+
+
+## Test 10: Fog reveals center and ring on game start
 var _fog_received: Array = []
 
 func _on_fog_updated(fog: Array) -> void:

@@ -342,11 +342,14 @@ static func _value_to_rank(value: int) -> String:
 		_: return "7"
 
 
-## Calculate scores for a turn placement using distance-to-reality
+## Calculate scores for a turn placement using distance-to-reality.
 ## Nominations: {role: {hex: Vector3i, claim: Dictionary}} (legacy Vector3i also supported)
-## Distance = abs(value_diff) + (suit mismatch ? 1 : 0)
-## Mayor scores only if chosen hex has the minimal distance (ties favor mayor)
-## Advisors score only if their nominated hex was chosen
+##
+## Scoring rules:
+## - Mayor scores 1 if placed suit matches reality suit AND chosen hex has minimal |value_diff|
+## - Advisors score 1 if Mayor builds on their nominated hex
+## - Same-hex tie: advisor with claim value closest to placed value wins; suit breaks exact ties
+## - Spade placement: Mayor gets 0, advisor with closest claim value still scores
 static func calculate_turn_scores(
 	placed_card: Dictionary,
 	chosen_hex: Vector3i,
@@ -355,23 +358,23 @@ static func calculate_turn_scores(
 ) -> Dictionary:
 	var scores := {"mayor": 0, "industry": 0, "urbanist": 0}
 
-	# No scoring on spades (game ends separately)
-	if placed_card.get("suit", -1) == MapLayers.Suit.SPADES:
-		return scores
-
-	# Extract hexes from new/legacy nomination formats
+	# Extract nomination entries
 	var ind_entry = nominations.get("industry", {})
 	var urb_entry = nominations.get("urbanist", {})
 	var industry_hex: Vector3i = INVALID_HEX
 	var urbanist_hex: Vector3i = INVALID_HEX
+	var industry_claim: Dictionary = {}
+	var urbanist_claim: Dictionary = {}
 
 	if ind_entry is Dictionary:
 		industry_hex = ind_entry.get("hex", INVALID_HEX)
+		industry_claim = ind_entry.get("claim", {})
 	elif ind_entry is Vector3i:
 		industry_hex = ind_entry
 
 	if urb_entry is Dictionary:
 		urbanist_hex = urb_entry.get("hex", INVALID_HEX)
+		urbanist_claim = urb_entry.get("claim", {})
 	elif urb_entry is Vector3i:
 		urbanist_hex = urb_entry
 
@@ -384,41 +387,57 @@ static func calculate_turn_scores(
 	if candidate_hexes.is_empty():
 		return scores
 
-	# Compute distances to reality for each nominated hex
-	var min_distance: int = INF
-	var chosen_distance: int = INF
+	var placed_value: int = placed_card.get("value", 0)
+	var placed_suit: int = placed_card.get("suit", -1)
+	var is_spade_placement: bool = (placed_suit == MapLayers.Suit.SPADES)
 
-	for nom_hex in candidate_hexes:
-		var reality: Dictionary = get_reality.call(nom_hex)
-		if reality.is_empty():
-			continue
+	# Compute distances to reality for each nominated hex (for Mayor scoring)
+	var min_valid_distance: int = INF # Only consider suit-matched distances
+	var chosen_distance: int = -1 # -1 = suit mismatch or not computed
 
-		var dist := _card_distance(placed_card, reality)
-		if dist < min_distance:
-			min_distance = dist
+	if not is_spade_placement:
+		for nom_hex in candidate_hexes:
+			var reality: Dictionary = get_reality.call(nom_hex)
+			if reality.is_empty():
+				continue
 
-		if nom_hex == chosen_hex:
-			chosen_distance = dist
+			var dist := _card_distance(placed_card, reality)
+			# dist >= 0 means suits matched; -1 means suit mismatch
+			if dist >= 0 and dist < min_valid_distance:
+				min_valid_distance = dist
 
-	# Mayor scores if they picked any hex with minimal distance (ties okay)
-	if chosen_distance <= min_distance:
-		scores["mayor"] = 1
+			if nom_hex == chosen_hex:
+				chosen_distance = dist
 
-	# Advisors score only if their nominated hex was chosen
-	# When both nominate the same hex, winner is determined by placed card suit
+		# Mayor scores if they picked a hex with suit match AND minimal distance (ties okay)
+		if chosen_distance >= 0 and chosen_distance <= min_valid_distance:
+			scores["mayor"] = 1
+
+	# Advisor scoring: who gets the point for the chosen hex?
 	var ind_nominated: bool = (chosen_hex == industry_hex)
 	var urb_nominated: bool = (chosen_hex == urbanist_hex)
 
 	if ind_nominated and urb_nominated:
-		# Both nominated same hex - winner depends on placed card suit
-		var placed_suit: int = placed_card.get("suit", -1)
-		match placed_suit:
-			MapLayers.Suit.DIAMONDS:
-				scores["industry"] = 1 # Industry's domain
-			MapLayers.Suit.HEARTS:
-				scores["urbanist"] = 1 # Urbanist's domain
-			_:
-				# Spades or unknown - default to industry (arbitrary)
+		# Both nominated same hex - winner based on claim value proximity to placed value
+		var ind_claim_value: int = industry_claim.get("value", 0)
+		var urb_claim_value: int = urbanist_claim.get("value", 0)
+		var ind_diff: int = abs(ind_claim_value - placed_value)
+		var urb_diff: int = abs(urb_claim_value - placed_value)
+
+		if ind_diff < urb_diff:
+			scores["industry"] = 1
+		elif urb_diff < ind_diff:
+			scores["urbanist"] = 1
+		else:
+			# Equal claim distances - suit matching placed card wins
+			var ind_claim_suit: int = industry_claim.get("suit", -1)
+			var urb_claim_suit: int = urbanist_claim.get("suit", -1)
+			if ind_claim_suit == placed_suit:
+				scores["industry"] = 1
+			elif urb_claim_suit == placed_suit:
+				scores["urbanist"] = 1
+			else:
+				# Neither claim suit matches - default to industry (arbitrary)
 				scores["industry"] = 1
 	else:
 		# Only one advisor nominated this hex
@@ -430,13 +449,15 @@ static func calculate_turn_scores(
 	return scores
 
 
+## Calculate similarity distance between two cards.
+## Returns |value_diff| if suits match (lower is better, 0 = exact match).
+## Returns -1 if suits do not match (Mayor cannot score).
 static func _card_distance(a: Dictionary, b: Dictionary) -> int:
+	if a.get("suit", -1) != b.get("suit", -1):
+		return -1 # Suit mismatch: Mayor cannot score
 	var va: int = a.get("value", 0)
 	var vb: int = b.get("value", 0)
-	var dist: int = abs(va - vb)
-	if a.get("suit", -1) != b.get("suit", -1):
-		dist += 1
-	return dist
+	return abs(va - vb)
 
 
 ## Check if a card is a spade (ends the game)
