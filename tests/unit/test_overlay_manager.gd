@@ -130,3 +130,4 @@ func test_label_positions_are_distinct() -> void:
 	assert_ne(urbanist, center, "Urbanist != Center")
 	assert_ne(reality, center, "Reality != Center")
 
+

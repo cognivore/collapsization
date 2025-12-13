@@ -1,0 +1,248 @@
+#!/usr/bin/env ysh
+# =============================================================================
+# Porkbun DNS Management
+# Creates, updates, or deletes A records via Porkbun API v3
+# =============================================================================
+
+source-guard dns.ysh || return 0
+
+source $_this_dir/lib/config.ysh
+source $_this_dir/lib/logging.ysh
+
+# -----------------------------------------------------------------------------
+# API Request Helper
+# -----------------------------------------------------------------------------
+
+proc porkbun_request (endpoint, payload) {
+  curl -sS -X POST "$[CONFIG.porkbun_api_base]$endpoint" \
+    -H 'Content-Type: application/json' \
+    -d "$payload"
+}
+
+proc check_response (response) {
+  var status = $(echo $response | jq -r '.status // "ERROR"')
+
+  if test "$status" != "SUCCESS" {
+    var message = $(echo $response | jq -r '.message // "Unknown error"')
+    log_error "API request failed - $message"
+    echo $response >&2
+    return 1
+  }
+
+  return 0
+}
+
+# -----------------------------------------------------------------------------
+# DNS Operations
+# -----------------------------------------------------------------------------
+
+proc dns_create (ip) {
+  log_section "Creating/Updating DNS Record"
+
+  var fqdn = "$[CONFIG.pkb_subdomain].$[CONFIG.pkb_domain]"
+  log "$fqdn -> $ip"
+
+  # First check if DNS already points to the desired IP
+  var current_ip = ''
+  try {
+    setvar current_ip = $(dig +short "$fqdn" '@8.8.8.8' 2>/dev/null | head -1)
+  }
+
+  if test "$current_ip" = "$ip" {
+    log_success "DNS already points to $ip - no change needed"
+    return 0
+  }
+
+  log "Current DNS: ${current_ip:-<none>}, desired: $ip"
+
+  # We need to change DNS - get secrets
+  get_porkbun_secrets
+
+  # Delete existing records first to avoid duplicates
+  var auth_payload = $(jq -n \
+    --arg apikey "$PKB_API_KEY" \
+    --arg secret "$PKB_API_SECRET" \
+    '{apikey: $apikey, secretapikey: $secret}')
+
+  porkbun_request "/dns/deleteByNameType/$[CONFIG.pkb_domain]/A/$[CONFIG.pkb_subdomain]" "$auth_payload" > /dev/null
+  log "Cleared existing records"
+
+  # Create fresh record
+  var payload = $(jq -n \
+    --arg apikey "$PKB_API_KEY" \
+    --arg secret "$PKB_API_SECRET" \
+    --arg name "$[CONFIG.pkb_subdomain]" \
+    --arg content "$ip" \
+    '{
+      apikey: $apikey,
+      secretapikey: $secret,
+      name: $name,
+      type: "A",
+      content: $content,
+      ttl: "60"
+    }')
+
+  var response = $(porkbun_request "/dns/create/$[CONFIG.pkb_domain]" "$payload")
+  var status = $(echo $response | jq -r '.status // "ERROR"')
+
+  if test "$status" = "SUCCESS" {
+    log_success "A record created"
+    log "Waiting for DNS propagation..."
+    sleep 5
+    dns_check
+    return 0
+  }
+
+  # Create failed unexpectedly
+  var error_msg = $(echo $response | jq -r '.message // "Unknown error"')
+  log_error "Failed to create DNS record"
+  log "  Porkbun API error: $error_msg"
+  log ""
+  log "  Please check:"
+  log "    1. Porkbun API credentials in passveil"
+  log "    2. Porkbun API status: https://porkbun.com/status"
+  log "    3. Domain ownership: $[CONFIG.pkb_domain]"
+  exit 1
+}
+
+proc dns_check {
+  log "Checking DNS record for: $[CONFIG.pkb_subdomain].$[CONFIG.pkb_domain]"
+
+  get_porkbun_secrets
+
+  var payload = $(jq -n \
+    --arg apikey "$PKB_API_KEY" \
+    --arg secret "$PKB_API_SECRET" \
+    '{
+      apikey: $apikey,
+      secretapikey: $secret
+    }')
+
+  var response = $(porkbun_request "/dns/retrieveByNameType/$[CONFIG.pkb_domain]/A/$[CONFIG.pkb_subdomain]" "$payload")
+
+  var check_ok = false
+  try {
+    check_response "$response"
+    setvar check_ok = true
+  }
+
+  if (check_ok) {
+    var content = $(echo $response | jq -r '.records[0].content // "NOT FOUND"')
+    log "Porkbun record: $content"
+  }
+
+  # Also check via DNS
+  if command -v dig > /dev/null 2>&1 {
+    var dns_result = $(dig +short "$[CONFIG.pkb_subdomain].$[CONFIG.pkb_domain]" A 2>/dev/null || echo "DNS lookup failed")
+    log "DNS lookup:     ${dns_result:-NOT FOUND}"
+  }
+}
+
+proc dns_delete {
+  log_section "Deleting DNS Record"
+  log "$[CONFIG.pkb_subdomain].$[CONFIG.pkb_domain]"
+
+  get_porkbun_secrets
+
+  var payload = $(jq -n \
+    --arg apikey "$PKB_API_KEY" \
+    --arg secret "$PKB_API_SECRET" \
+    '{
+      apikey: $apikey,
+      secretapikey: $secret
+    }')
+
+  var response = $(porkbun_request "/dns/deleteByNameType/$[CONFIG.pkb_domain]/A/$[CONFIG.pkb_subdomain]" "$payload")
+
+  var del_ok = false
+  try {
+    check_response "$response"
+    setvar del_ok = true
+  }
+
+  if (del_ok) {
+    log_success "A record deleted"
+  }
+}
+
+proc dns_wait (expected_ip) {
+  log_section "Waiting for DNS Propagation"
+  log "Expected: $[CONFIG.domain] -> $expected_ip"
+
+  var start_ts = $(date +%s)
+  var timeout = CONFIG.dns_timeout_seconds
+  var interval = CONFIG.dns_poll_interval
+
+  while true {
+    var now_ts = $(date +%s)
+    var elapsed = now_ts - start_ts
+
+    if (elapsed >= timeout) {
+      log_error "Timed out after $[timeout / 60] minutes"
+      return 1
+    }
+
+    var answers = $(dig +short A "$[CONFIG.domain]" 2>/dev/null || true)
+    log "[$(date +%H:%M:%S)] A records: ${answers:-<none>}"
+
+    case $answers in
+      (*$expected_ip*)
+        log ""
+        log_success "DNS propagation complete!"
+        return 0
+        ;;
+    esac
+
+    sleep $interval
+  }
+}
+
+# -----------------------------------------------------------------------------
+# CLI Interface
+# -----------------------------------------------------------------------------
+
+proc dns_main {
+  require_commands curl jq passveil dig
+
+  if test $# -lt 1 {
+    echo "Usage: $0 <command> [ip_address]"
+    echo ""
+    echo "Commands:"
+    echo "  create <ip>    Create A record"
+    echo "  delete         Delete A record"
+    echo "  check          Check current record"
+    echo "  wait <ip>      Wait for DNS propagation"
+    return 1
+  }
+
+  var cmd = $1
+  shift
+
+  case $cmd in
+    (create)
+      if test $# -lt 1 { echo "ERROR: IP required"; return 1 }
+      dns_create $1
+      ;;
+    (delete)
+      dns_delete
+      ;;
+    (check)
+      dns_check
+      ;;
+    (wait)
+      if test $# -lt 1 { echo "ERROR: IP required"; return 1 }
+      dns_wait $1
+      ;;
+    (*)
+      echo "ERROR: Unknown command: $cmd"
+      return 1
+      ;;
+  esac
+}
+
+# Run if executed directly
+if is-main {
+  dns_main @ARGV
+}
+
+

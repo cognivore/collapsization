@@ -7,8 +7,10 @@
 [ext_resource type="Script" uid="uid://ul28ujfelhr3" path="res://addons/netcode/cursor_simulator.gd" id="5_simulator"]
 [ext_resource type="Script" path="res://scripts/game_manager.gd" id="6_gamemanager"]
 [ext_resource type="PackedScene" path="res://ui/GameHud.tscn" id="7_gamehud"]
+[ext_resource type="Script" path="res://scripts/world.gd" id="8_world"]
 
 [node name="World" type="Node2D"]
+script = ExtResource("8_world")
 
 [node name="HexField" type="TileMapLayer" parent="."]
 tile_set = ExtResource("2_tileset")
@@ -25,9 +27,12 @@ script = ExtResource("5_simulator")
 script = ExtResource("6_gamemanager")
 hex_field_path = NodePath("../HexField")
 
-[node name="GameHud" parent="." instance=ExtResource("7_gamehud")]
-game_manager_path = NodePath("../GameManager")
-hex_field_path = NodePath("../HexField")
+[node name="HudLayer" type="CanvasLayer" parent="."]
+layer = 10
+
+[node name="GameHud" parent="HudLayer" instance=ExtResource("7_gamehud")]
+game_manager_path = NodePath("../../GameManager")
+hex_field_path = NodePath("../../HexField")
 
 [node name="Camera2D" type="Camera2D" parent="."]
 position = Vector2(0, 0)

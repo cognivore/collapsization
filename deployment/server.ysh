@@ -1,0 +1,248 @@
+#!/usr/bin/env ysh
+# =============================================================================
+# Remote Server Preparation
+# Sets up the server environment: user, firewall, directories
+# =============================================================================
+
+source-guard server.ysh || return 0
+
+source $_this_dir/lib/config.ysh
+source $_this_dir/lib/logging.ysh
+source $_this_dir/lib/ssh.ysh
+
+# -----------------------------------------------------------------------------
+# User Management
+# -----------------------------------------------------------------------------
+
+proc ensure_user {
+  log "Ensuring service user exists: $[CONFIG.service_user]"
+
+  var script = "
+set -e
+
+# Check if user exists
+if id '$[CONFIG.service_user]' &>/dev/null; then
+  echo 'User $[CONFIG.service_user] already exists'
+  exit 0
+fi
+
+# Create system user (no login shell, no home directory)
+useradd -r -s /bin/false '$[CONFIG.service_user]'
+echo 'Created user $[CONFIG.service_user]'
+"
+
+  ssh_exec_script "$script"
+  log_success "Service user ready"
+}
+
+# -----------------------------------------------------------------------------
+# Firewall Configuration
+# -----------------------------------------------------------------------------
+
+proc ensure_firewall {
+  log "Configuring firewall for UDP port $[CONFIG.game_port]"
+
+  var script = "
+set -e
+
+# Check if UFW is installed
+if ! command -v ufw &>/dev/null; then
+  echo 'UFW not installed, installing...'
+  apt-get update -qq
+  apt-get install -y -qq ufw
+fi
+
+# Enable UFW if not already
+ufw status | grep -q 'Status: active' || {
+  echo 'y' | ufw enable
+}
+
+# Check if rule already exists
+if ufw status | grep -q '$[CONFIG.game_port]/$[CONFIG.game_protocol]'; then
+  echo 'Firewall rule already exists for $[CONFIG.game_port]/$[CONFIG.game_protocol]'
+  exit 0
+fi
+
+# Add the rule
+ufw allow $[CONFIG.game_port]/$[CONFIG.game_protocol] comment 'Multiplayer Minesweeper'
+echo 'Added firewall rule for $[CONFIG.game_port]/$[CONFIG.game_protocol]'
+
+# Also ensure SSH is allowed
+ufw allow ssh
+"
+
+  ssh_exec_script "$script"
+  log_success "Firewall configured"
+}
+
+# -----------------------------------------------------------------------------
+# Directory Setup
+# -----------------------------------------------------------------------------
+
+proc ensure_directories {
+  log "Ensuring installation directory: $[CONFIG.install_dir]"
+
+  var script = "
+set -e
+
+# Create installation directory
+mkdir -p '$[CONFIG.install_dir]'
+
+# Set ownership
+chown '$[CONFIG.service_user]:$[CONFIG.service_group]' '$[CONFIG.install_dir]'
+
+echo 'Directory $[CONFIG.install_dir] ready'
+"
+
+  ssh_exec_script "$script"
+  log_success "Directories ready"
+}
+
+# -----------------------------------------------------------------------------
+# Binary Deployment
+# -----------------------------------------------------------------------------
+
+proc deploy_binary (local_path) {
+  log_section "Deploying Binary to Server"
+
+  if test -z "$local_path" {
+    log_error "No binary path provided"
+    return 1
+  }
+
+  if ! test -f "$local_path" {
+    log_error "Binary not found: $local_path"
+    return 1
+  }
+
+  var remote_path = "$[CONFIG.install_dir]/$[CONFIG.binary_name]"
+
+  # Upload binary
+  scp_upload "$local_path" "$remote_path"
+
+  # Set permissions
+  var script = "
+set -e
+
+chmod +x '$remote_path'
+chown '$[CONFIG.service_user]:$[CONFIG.service_group]' '$remote_path'
+
+echo 'Binary deployed and permissions set'
+"
+
+  ssh_exec_script "$script"
+  log_success "Binary deployed to $remote_path"
+}
+
+# -----------------------------------------------------------------------------
+# Server Status
+# -----------------------------------------------------------------------------
+
+proc check_server_status {
+  log "Checking server status..."
+
+  var script = "
+echo '=== System Info ==='
+uname -a
+echo ''
+
+echo '=== Disk Usage ==='
+df -h / | tail -1
+echo ''
+
+echo '=== Memory ==='
+free -h | grep Mem
+echo ''
+
+echo '=== Service User ==='
+id '$[CONFIG.service_user]' 2>/dev/null || echo 'User not found'
+echo ''
+
+echo '=== Installation Directory ==='
+ls -la '$[CONFIG.install_dir]' 2>/dev/null || echo 'Directory not found'
+echo ''
+
+echo '=== Firewall ==='
+ufw status | grep '$[CONFIG.game_port]' || echo 'No firewall rule for port $[CONFIG.game_port]'
+echo ''
+
+echo '=== Game Service ==='
+systemctl is-active '$[SYSTEMD_CONFIG.service_name]' 2>/dev/null || echo 'Service not running'
+"
+
+  ssh_exec_script "$script"
+}
+
+# -----------------------------------------------------------------------------
+# Main Preparation Function
+# -----------------------------------------------------------------------------
+
+proc prepare_server {
+  log_section "Preparing Remote Server"
+
+  log "Server: $[CONFIG.ssh_host]"
+
+  # Check SSH connectivity
+  if ! check_ssh {
+    log_error "Cannot connect to server via SSH"
+    return 1
+  }
+
+  log_success "SSH connection verified"
+
+  # Prepare server
+  ensure_user
+  ensure_firewall
+  ensure_directories
+
+  log_section "Server Preparation Complete"
+}
+
+# -----------------------------------------------------------------------------
+# CLI Interface
+# -----------------------------------------------------------------------------
+
+proc server_main {
+  require_commands ssh scp
+
+  if test $# -lt 1 {
+    prepare_server
+    return
+  }
+
+  var cmd = $1
+  shift
+
+  case $cmd in
+    (prepare)
+      prepare_server
+      ;;
+    (user)
+      ensure_user
+      ;;
+    (firewall)
+      ensure_firewall
+      ;;
+    (dirs)
+      ensure_directories
+      ;;
+    (deploy)
+      if test $# -lt 1 { echo "ERROR: Binary path required"; return 1 }
+      deploy_binary $1
+      ;;
+    (status)
+      check_server_status
+      ;;
+    (*)
+      echo "Usage: $0 [prepare|user|firewall|dirs|deploy <path>|status]"
+      return 1
+      ;;
+  esac
+}
+
+# Run if executed directly
+if is-main {
+  server_main @ARGV
+}
+
+

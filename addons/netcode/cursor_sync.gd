@@ -133,16 +133,9 @@ func _is_demo_mode() -> bool:
 	return false
 
 
-func _get_logger() -> Node:
-	if has_node("/root/NetworkLogger"):
-		return get_node("/root/NetworkLogger")
-	return null
-
-
 func _log_cursor_update(player_id: int, hex: Vector3i, is_local: bool) -> void:
-	var logger := _get_logger()
-	if logger:
-		logger.log_cursor_update(player_id, hex, is_local)
+	var source := "local" if is_local else "remote"
+	Log.net("CURSOR [%s] player=%d hex=(%d,%d,%d)" % [source, player_id, hex.x, hex.y, hex.z])
 
 
 func _update_remote_cursors() -> void:

@@ -1,8 +1,24 @@
 #!/bin/bash
 # Single Player Restart Script for Collapsization
 # Kills all Godot processes and restarts the game in single player mode
+#
+# Debug logging:
+#   --debug-log           Enable all log categories
+#   --debug-log=CAT,CAT   Enable specific categories (INPUT,NET,GAME,UI,HEX,DEBUG)
+#   --debug-log-file      Also write logs to user://logs/
+#
+# Example:
+#   ./single_player_restart.sh --debug-log=INPUT,HEX
 
 set -e
+
+# Check for debug flags
+DEBUG_FLAGS=""
+for arg in "$@"; do
+    if [[ "$arg" == --debug-log* ]]; then
+        DEBUG_FLAGS="$DEBUG_FLAGS $arg"
+    fi
+done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GODOT_APP="/Applications/Godot.app/Contents/MacOS/Godot"
@@ -31,7 +47,10 @@ echo "Log file: $LOG_FILE"
 
 # Start Godot with the project
 cd "$SCRIPT_DIR"
-"$GODOT_APP" --path . 2>&1 | tee "$LOG_FILE" &
+if [[ -n "$DEBUG_FLAGS" ]]; then
+    echo "Debug flags: $DEBUG_FLAGS"
+fi
+"$GODOT_APP" --path . $DEBUG_FLAGS 2>&1 | tee "$LOG_FILE" &
 
 GODOT_PID=$!
 echo "Godot started with PID: $GODOT_PID"

@@ -2,6 +2,8 @@
 ## Access via NetworkManager autoload.
 extends Node
 
+const DebugLogger := preload("res://scripts/debug/debug_logger.gd")
+
 signal server_started
 signal server_stopped
 signal connected_to_server
@@ -148,10 +150,10 @@ func get_remote_players() -> Array[PlayerState]:
 
 func _on_transport_connected() -> void:
 	if transport.is_server():
-		print("NetworkManager: Server started")
+		DebugLogger.log("NetworkManager: Server started")
 		server_started.emit()
 	else:
-		print("NetworkManager: Connected to server")
+		DebugLogger.log("NetworkManager: Connected to server")
 		# Create local player for client
 		local_player = PlayerState.new()
 		local_player.peer_id = transport.get_local_peer_id()
@@ -162,10 +164,10 @@ func _on_transport_connected() -> void:
 
 func _on_transport_disconnected() -> void:
 	if transport and transport.is_server():
-		print("NetworkManager: Server stopped")
+		DebugLogger.log("NetworkManager: Server stopped")
 		server_stopped.emit()
 	else:
-		print("NetworkManager: Disconnected from server")
+		DebugLogger.log("NetworkManager: Disconnected from server")
 		disconnected_from_server.emit()
 
 	players.clear()
@@ -179,7 +181,7 @@ func _on_peer_connected(peer_id: int) -> void:
 	player.is_local = false
 	players[peer_id] = player
 
-	print("NetworkManager: Player %d joined" % peer_id)
+	DebugLogger.log("NetworkManager: Player %d joined" % peer_id)
 	_log_player_joined(peer_id)
 	player_joined.emit(peer_id)
 
@@ -190,7 +192,7 @@ func _on_peer_connected(peer_id: int) -> void:
 
 func _on_peer_disconnected(peer_id: int) -> void:
 	players.erase(peer_id)
-	print("NetworkManager: Player %d left" % peer_id)
+	DebugLogger.log("NetworkManager: Player %d left" % peer_id)
 	_log_player_left(peer_id)
 	player_left.emit(peer_id)
 
@@ -253,26 +255,14 @@ func _sync_players_to_peer(peer_id: int) -> void:
 			send_message(peer_id, MessageType.PLAYER_STATE, state_data)
 
 
-## Logging helpers
-func _get_logger() -> Node:
-	if has_node("/root/NetworkLogger"):
-		return get_node("/root/NetworkLogger")
-	return null
-
-
+## Logging helpers (using unified Logger)
 func _log_player_joined(peer_id: int) -> void:
-	var logger := _get_logger()
-	if logger:
-		logger.log_player_joined(peer_id)
+	Log.net("PLAYER_JOINED id=%d" % peer_id)
 
 
 func _log_player_left(peer_id: int) -> void:
-	var logger := _get_logger()
-	if logger:
-		logger.log_player_left(peer_id)
+	Log.net("PLAYER_LEFT id=%d" % peer_id)
 
 
 func _log_message(from_id: int, msg_type: int, data: Dictionary) -> void:
-	var logger := _get_logger()
-	if logger:
-		logger.log_network_message(from_id, msg_type, data)
+	Log.net("NET_MSG from=%d type=%d data=%s" % [from_id, msg_type, str(data)])

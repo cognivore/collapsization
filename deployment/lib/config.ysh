@@ -1,0 +1,64 @@
+#!/usr/bin/env ysh
+# =============================================================================
+# Collapsization Server Deployment Configuration
+# Declarative configuration for the Multiplayer Minesweeper dedicated server
+# =============================================================================
+
+# Prevent double-sourcing
+source-guard lib/config.ysh || return 0
+
+# -----------------------------------------------------------------------------
+# Server Configuration
+# -----------------------------------------------------------------------------
+
+const CONFIG = {
+  # Remote server details
+  server_ip: '46.62.199.15',
+  server_user: 'root',
+  ssh_host: 'root@46.62.199.15',
+
+  # Service user (non-root for running the game)
+  service_user: 'minesweeper',
+  service_group: 'minesweeper',
+
+  # Installation paths
+  install_dir: '/opt/minesweeper',
+  binary_name: 'multiplayer-minesweeper-server.x86_64',
+
+  # Game server settings
+  game_port: 7777,
+  game_protocol: 'udp',
+
+  # Domain configuration
+  domain: 'mines.fere.me',
+  pkb_domain: 'fere.me',
+  pkb_subdomain: 'mines',
+
+  # Porkbun API
+  porkbun_api_base: 'https://api.porkbun.com/api/json/v3',
+
+  # DNS settings
+  dns_timeout_seconds: 300,
+  dns_poll_interval: 10,
+
+  # GitHub release configuration
+  github_org: 'YOUR_ORG',  # TODO: Update with actual org
+  github_repo: 'collapsization',
+  release_asset_name: 'multiplayer-minesweeper-server-linux.zip',
+
+  # Local build configuration
+  godot_export_preset: 'Linux Server',
+  local_build_path: 'build/linux-server/multiplayer-minesweeper-server.x86_64',
+}
+
+# -----------------------------------------------------------------------------
+# Systemd Service Configuration
+# -----------------------------------------------------------------------------
+
+const SYSTEMD_CONFIG = {
+  service_name: 'minesweeper-lobby',
+  description: 'Multiplayer Minesweeper Lobby Server',
+  restart_sec: 5,
+}
+
+

@@ -1,0 +1,104 @@
+#!/usr/bin/env ysh
+# =============================================================================
+# SSH/SCP Utilities
+# Provides helpers for remote server operations
+# =============================================================================
+
+# Prevent double-sourcing
+source-guard lib/ssh.ysh || return 0
+
+source $_this_dir/config.ysh
+source $_this_dir/logging.ysh
+
+# -----------------------------------------------------------------------------
+# SSH Execution
+# -----------------------------------------------------------------------------
+
+proc ssh_exec (;; ...commands) {
+  # Execute commands on the remote server
+  # Usage: ssh_exec -- 'command1' 'command2'
+
+  var ssh_host = CONFIG.ssh_host
+
+  for cmd in (commands) {
+    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "$ssh_host" "$cmd"
+  }
+}
+
+proc ssh_exec_script (script) {
+  # Execute a multi-line script on the remote server
+  var ssh_host = CONFIG.ssh_host
+
+  ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "$ssh_host" "bash -s" <<< "$script"
+}
+
+# -----------------------------------------------------------------------------
+# SCP File Transfer
+# -----------------------------------------------------------------------------
+
+proc scp_upload (local_path, remote_path) {
+  # Upload a file to the remote server
+  var ssh_host = CONFIG.ssh_host
+
+  log "Uploading $local_path to $ssh_host:$remote_path"
+  scp -o StrictHostKeyChecking=no "$local_path" "$ssh_host:$remote_path"
+}
+
+proc scp_download (remote_path, local_path) {
+  # Download a file from the remote server
+  var ssh_host = CONFIG.ssh_host
+
+  log "Downloading $ssh_host:$remote_path to $local_path"
+  scp -o StrictHostKeyChecking=no "$ssh_host:$remote_path" "$local_path"
+}
+
+# -----------------------------------------------------------------------------
+# SSH Connectivity
+# -----------------------------------------------------------------------------
+
+proc wait_for_ssh (;; max_attempts=30, interval=10) {
+  # Wait for SSH to become available on the remote server
+  var ssh_host = CONFIG.ssh_host
+
+  log "Waiting for SSH to become available on $ssh_host..."
+
+  var attempt = 1
+
+  while (attempt <= max_attempts) {
+    log "SSH connection attempt $attempt/$max_attempts..."
+
+    try {
+      ssh -o StrictHostKeyChecking=no \
+          -o ConnectTimeout=10 \
+          -o BatchMode=yes \
+          "$ssh_host" "echo 'SSH ready'" > /dev/null 2>&1
+      log_success "SSH connection established!"
+      return 0
+    }
+
+    log "SSH not ready, retrying in $interval seconds..."
+    sleep $interval
+    setvar attempt = attempt + 1
+  }
+
+  log_error "SSH connection failed after $max_attempts attempts"
+  return 1
+}
+
+proc check_ssh {
+  # Quick check if SSH is available (no retry)
+  # Returns 0 if SSH works, 1 otherwise
+  var ssh_host = CONFIG.ssh_host
+
+  var result = 1
+  try {
+    ssh -o StrictHostKeyChecking=no \
+        -o ConnectTimeout=5 \
+        -o BatchMode=yes \
+        "$ssh_host" "true" 2>/dev/null
+    setvar result = 0
+  }
+
+  return $result
+}
+

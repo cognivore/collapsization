@@ -4,16 +4,16 @@ class_name PlayerState
 extends RefCounted
 
 ## Color palette for players - ordered for maximum contrast between adjacent indices
-## Index 0 = server (unused), 1 = client 1, 2 = client 2, etc.
+## Indexed by peer_id: server=1, first client=2, second client=3, etc.
 const PLAYER_COLORS: Array[Color] = [
-	Color("#888888"), # grey (server/unused)
-	Color("#e74c3c"), # RED - client 1
-	Color("#4a9eff"), # BLUE - client 2
-	Color("#5cb85c"), # green - client 3
-	Color("#ff8c42"), # orange - client 4
-	Color("#9b59b6"), # purple - client 5
-	Color("#f1c40f"), # yellow - client 6
-	Color("#1abc9c"), # teal - client 7
+	Color("#888888"), # grey - reserved (index 0, unused)
+	Color("#e74c3c"), # RED - server/Mayor (peer 1)
+	Color("#4a9eff"), # BLUE - Industry advisor (peer 2)
+	Color("#5cb85c"), # GREEN - Urbanist advisor (peer 3)
+	Color("#ff8c42"), # orange - extra player 4
+	Color("#9b59b6"), # purple - extra player 5
+	Color("#f1c40f"), # yellow - extra player 6
+	Color("#1abc9c"), # teal - extra player 7
 ]
 
 ## Network peer ID

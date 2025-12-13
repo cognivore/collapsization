@@ -4,6 +4,8 @@
 extends Resource
 class_name MapLayers
 
+const DebugLogger := preload("res://scripts/debug/debug_logger.gd")
+
 enum Suit {HEARTS, DIAMONDS, SPADES}
 
 const RANKS: Array[String] = [
@@ -74,13 +76,13 @@ func init(seed: int = -1) -> void:
 	# Build and shuffle the initial reality deck
 	_build_deck()
 	_shuffle_deck()
-	print("MapLayers: Initialized with deck of %d cards" % _reality_deck.size())
+	DebugLogger.log("MapLayers: Initialized with deck of %d cards" % _reality_deck.size())
 
 
 ## Initialize center tile as Ace of Hearts (the starting built tile)
 func init_center() -> void:
 	truth[Vector3i.ZERO] = make_card(Suit.HEARTS, "A")
-	print("MapLayers: Center set to A♥")
+	DebugLogger.log("MapLayers: Center set to A♥")
 
 
 ## Lazily reveal a tile's reality - generates from deck if not yet known
@@ -92,7 +94,7 @@ func reveal_tile(cube: Vector3i) -> Dictionary:
 	# Draw a new card for this tile
 	var card := _draw_card()
 	truth[cube] = card
-	print("MapLayers: Revealed %s at (%d,%d,%d)" % [label(card), cube.x, cube.y, cube.z])
+	DebugLogger.log("MapLayers: Revealed %s at (%d,%d,%d)" % [label(card), cube.x, cube.y, cube.z])
 	return card
 
 
@@ -116,7 +118,7 @@ func _build_deck() -> void:
 	for suit in [Suit.HEARTS, Suit.DIAMONDS, Suit.SPADES]:
 		for rank in RANKS:
 			_reality_deck.append(make_card(suit, rank))
-	print("MapLayers: Built reality deck with %d cards" % _reality_deck.size())
+	DebugLogger.log("MapLayers: Built reality deck with %d cards" % _reality_deck.size())
 
 
 ## Shuffle the reality deck using Fisher-Yates
@@ -133,7 +135,7 @@ func _draw_card() -> Dictionary:
 	if _reality_deck.is_empty():
 		_build_deck()
 		_shuffle_deck()
-		print("MapLayers: Reality deck exhausted, reshuffled new deck")
+		DebugLogger.log("MapLayers: Reality deck exhausted, reshuffled new deck")
 	return _reality_deck.pop_back()
 
 
@@ -151,4 +153,4 @@ func generate(field: Node, map_radius: int, seed: int = -1) -> void:
 		if not truth.has(cube):
 			reveal_tile(cube)
 
-	print("MapLayers: Legacy generate() - %d tiles" % truth.size())
+	DebugLogger.log("MapLayers: Legacy generate() - %d tiles" % truth.size())

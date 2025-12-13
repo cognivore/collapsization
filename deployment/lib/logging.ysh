@@ -1,0 +1,67 @@
+#!/usr/bin/env ysh
+# =============================================================================
+# Logging Utilities
+# Provides consistent logging functions for deployment scripts
+# =============================================================================
+
+# Prevent double-sourcing
+source-guard lib/logging.ysh || return 0
+
+# -----------------------------------------------------------------------------
+# Log Functions
+# -----------------------------------------------------------------------------
+
+proc log (msg) {
+  echo "[$(date '+%H:%M:%S')] $msg"
+}
+
+proc log_section (title) {
+  echo ""
+  echo "═══════════════════════════════════════════════════════════════════════════════"
+  echo " $title"
+  echo "═══════════════════════════════════════════════════════════════════════════════"
+}
+
+proc log_success (msg) {
+  echo "[$(date '+%H:%M:%S')] ✅ $msg"
+}
+
+proc log_warning (msg) {
+  echo "[$(date '+%H:%M:%S')] ⚠️  $msg"
+}
+
+proc log_error (msg) {
+  echo "[$(date '+%H:%M:%S')] ❌ $msg" >&2
+}
+
+# -----------------------------------------------------------------------------
+# Command Verification
+# -----------------------------------------------------------------------------
+
+proc require_command (cmd) {
+  if ! command -v $cmd > /dev/null 2>&1 {
+    log_error "Required command '$cmd' not found."
+    exit 1
+  }
+}
+
+proc require_commands {
+  for cmd in @ARGV {
+    require_command $cmd
+  }
+}
+
+# -----------------------------------------------------------------------------
+# Secrets from Passveil
+# -----------------------------------------------------------------------------
+
+proc get_porkbun_secrets {
+  # Fetch API key and secret from passveil
+  # Sets PKB_API_KEY and PKB_API_SECRET globals
+
+  var creds = $(passveil show porkbun.com/api)
+  setglobal PKB_API_KEY = $(echo $creds | head -1)
+  setglobal PKB_API_SECRET = $(echo $creds | tail -1)
+}
+
+

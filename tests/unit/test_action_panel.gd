@@ -124,3 +124,4 @@ func test_action_card_hidden_for_advisors() -> void:
 	var state := _panel.compute_state(INDUSTRY, NOMINATE, 0, VALID_HEX, 0)
 	assert_false(state.show_action_card, "Action card hidden for advisors")
 
+

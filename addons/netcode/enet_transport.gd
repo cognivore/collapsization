@@ -47,7 +47,7 @@ func host(port: int, max_clients: int = 32) -> Error:
 	_peer.peer_connected.connect(_on_peer_connected)
 	_peer.peer_disconnected.connect(_on_peer_disconnected)
 
-	print("ENetTransport: Server started on port %d" % port)
+	Log.net("ENetTransport: Server started on port %d" % port)
 	connected.emit()
 	return OK
 
@@ -74,7 +74,7 @@ func connect_to_host(address: String, port: int) -> Error:
 	_peer.peer_connected.connect(_on_peer_connected)
 	_peer.peer_disconnected.connect(_on_peer_disconnected)
 
-	print("ENetTransport: Connecting to %s:%d..." % [address, port])
+	Log.net("ENetTransport: Connecting to %s:%d..." % [address, port])
 	return OK
 
 
@@ -93,7 +93,7 @@ func disconnect_from_host() -> void:
 	_is_server = false
 	_connected_peers.clear()
 
-	print("ENetTransport: Disconnected")
+	Log.net("ENetTransport: Disconnected")
 	disconnected.emit()
 
 
@@ -144,12 +144,12 @@ func _on_peer_connected(id: int) -> void:
 	var was_empty := _connected_peers.is_empty()
 	if not id in _connected_peers:
 		_connected_peers.append(id)
-	print("ENetTransport: Peer %d connected" % id)
+	Log.net("ENetTransport: Peer %d connected" % id)
 
 	# For clients: emit connected when we first connect to server (peer 1)
 	if not _is_server and id == 1 and not _client_connected_emitted:
 		_client_connected_emitted = true
-		print("ENetTransport: Client connected to server")
+		Log.net("ENetTransport: Client connected to server")
 		connected.emit()
 
 	peer_connected.emit(id)
@@ -157,5 +157,5 @@ func _on_peer_connected(id: int) -> void:
 
 func _on_peer_disconnected(id: int) -> void:
 	_connected_peers.erase(id)
-	print("ENetTransport: Peer %d disconnected" % id)
+	Log.net("ENetTransport: Peer %d disconnected" % id)
 	peer_disconnected.emit(id)

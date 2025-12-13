@@ -56,6 +56,11 @@ custom_minimum_size = Vector2(0, 44)
 layout_mode = 2
 text = "Resume"
 
+[node name="MultiplayerButton" type="Button" parent="MenuPanel/MarginContainer/MainMenu"]
+custom_minimum_size = Vector2(0, 44)
+layout_mode = 2
+text = "Multiplayer"
+
 [node name="SettingsButton" type="Button" parent="MenuPanel/MarginContainer/MainMenu"]
 custom_minimum_size = Vector2(0, 44)
 layout_mode = 2
@@ -206,6 +211,7 @@ size_flags_horizontal = 3
 text = "Reset"
 
 [connection signal="pressed" from="MenuPanel/MarginContainer/MainMenu/ResumeButton" to="." method="_on_resume_pressed"]
+[connection signal="pressed" from="MenuPanel/MarginContainer/MainMenu/MultiplayerButton" to="." method="_on_multiplayer_pressed"]
 [connection signal="pressed" from="MenuPanel/MarginContainer/MainMenu/SettingsButton" to="." method="_on_settings_pressed"]
 [connection signal="pressed" from="MenuPanel/MarginContainer/MainMenu/ExitButton" to="." method="_on_exit_pressed"]
 [connection signal="item_selected" from="MenuPanel/MarginContainer/SettingsMenu/PlayerColor/ColorOption" to="." method="_on_color_selected"]

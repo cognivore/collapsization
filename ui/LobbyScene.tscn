@@ -1,0 +1,270 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://ui/lobby_ui.gd" id="1_lobby"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
+bg_color = Color(0.12, 0.14, 0.18, 0.95)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.3, 0.5, 0.4, 0.8)
+corner_radius_top_left = 16
+corner_radius_top_right = 16
+corner_radius_bottom_right = 16
+corner_radius_bottom_left = 16
+
+[node name="LobbyUI" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_lobby")
+
+[node name="Background" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.08, 0.09, 0.12, 1)
+
+[node name="Title" type="Label" parent="."]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -200.0
+offset_top = 40.0
+offset_right = 200.0
+offset_bottom = 100.0
+grow_horizontal = 2
+mouse_filter = 2
+theme_override_colors/font_color = Color(0.9, 0.95, 0.9, 1)
+theme_override_font_sizes/font_size = 36
+text = "Multiplayer Minesweeper"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="ConnectPanel" type="PanelContainer" parent="."]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -200.0
+offset_top = -120.0
+offset_right = 200.0
+offset_bottom = 120.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+
+[node name="VBox" type="VBoxContainer" parent="ConnectPanel"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="Header" type="Label" parent="ConnectPanel/VBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "Connect to Lobby"
+horizontal_alignment = 1
+
+[node name="NameRow" type="HBoxContainer" parent="ConnectPanel/VBox"]
+layout_mode = 2
+
+[node name="NameLabel" type="Label" parent="ConnectPanel/VBox/NameRow"]
+layout_mode = 2
+custom_minimum_size = Vector2(80, 0)
+text = "Name:"
+
+[node name="NameInput" type="LineEdit" parent="ConnectPanel/VBox/NameRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+placeholder_text = "Your name"
+max_length = 16
+
+[node name="AddressRow" type="HBoxContainer" parent="ConnectPanel/VBox"]
+layout_mode = 2
+
+[node name="AddressLabel" type="Label" parent="ConnectPanel/VBox/AddressRow"]
+layout_mode = 2
+custom_minimum_size = Vector2(80, 0)
+text = "Server:"
+
+[node name="AddressInput" type="LineEdit" parent="ConnectPanel/VBox/AddressRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "mines.fere.me"
+placeholder_text = "mines.fere.me"
+
+[node name="PortRow" type="HBoxContainer" parent="ConnectPanel/VBox"]
+layout_mode = 2
+
+[node name="PortLabel" type="Label" parent="ConnectPanel/VBox/PortRow"]
+layout_mode = 2
+custom_minimum_size = Vector2(80, 0)
+text = "Port:"
+
+[node name="PortInput" type="LineEdit" parent="ConnectPanel/VBox/PortRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "7777"
+placeholder_text = "7777"
+
+[node name="ConnectButton" type="Button" parent="ConnectPanel/VBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 40)
+text = "Connect"
+
+[node name="Status" type="Label" parent="ConnectPanel/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.7, 0.7, 0.7, 1)
+text = "Enter server address to connect"
+horizontal_alignment = 1
+autowrap_mode = 2
+
+[node name="LobbyPanel" type="PanelContainer" parent="."]
+visible = false
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -250.0
+offset_top = -180.0
+offset_right = 250.0
+offset_bottom = 180.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+
+[node name="VBox" type="VBoxContainer" parent="LobbyPanel"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Header" type="Label" parent="LobbyPanel/VBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "Game Lobby"
+horizontal_alignment = 1
+
+[node name="RoomListLabel" type="Label" parent="LobbyPanel/VBox"]
+layout_mode = 2
+text = "Available Rooms:"
+
+[node name="ScrollContainer" type="ScrollContainer" parent="LobbyPanel/VBox"]
+layout_mode = 2
+size_flags_vertical = 3
+custom_minimum_size = Vector2(0, 160)
+
+[node name="RoomList" type="VBoxContainer" parent="LobbyPanel/VBox/ScrollContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 8
+
+[node name="ButtonRow" type="HBoxContainer" parent="LobbyPanel/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 12
+alignment = 1
+
+[node name="CreateRoomButton" type="Button" parent="LobbyPanel/VBox/ButtonRow"]
+layout_mode = 2
+custom_minimum_size = Vector2(120, 36)
+text = "Create Room"
+
+[node name="RefreshButton" type="Button" parent="LobbyPanel/VBox/ButtonRow"]
+layout_mode = 2
+custom_minimum_size = Vector2(100, 36)
+text = "Refresh"
+
+[node name="DisconnectButton" type="Button" parent="LobbyPanel/VBox/ButtonRow"]
+layout_mode = 2
+custom_minimum_size = Vector2(100, 36)
+text = "Disconnect"
+
+[node name="Status" type="Label" parent="LobbyPanel/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.7, 0.7, 0.7, 1)
+text = "Connected to lobby"
+horizontal_alignment = 1
+
+[node name="RoomPanel" type="PanelContainer" parent="."]
+visible = false
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -200.0
+offset_top = -150.0
+offset_right = 200.0
+offset_bottom = 150.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+
+[node name="VBox" type="VBoxContainer" parent="RoomPanel"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="Header" type="Label" parent="RoomPanel/VBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "Waiting Room"
+horizontal_alignment = 1
+
+[node name="RoomIdLabel" type="Label" parent="RoomPanel/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.4, 0.8, 0.5, 1)
+theme_override_font_sizes/font_size = 24
+text = "Room: ABC123"
+horizontal_alignment = 1
+
+[node name="PlayerListLabel" type="Label" parent="RoomPanel/VBox"]
+layout_mode = 2
+text = "Players:"
+
+[node name="PlayerList" type="VBoxContainer" parent="RoomPanel/VBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 80)
+
+[node name="PlayerCountLabel" type="Label" parent="RoomPanel/VBox"]
+layout_mode = 2
+text = "Slots: 1 / 3"
+horizontal_alignment = 1
+
+[node name="ButtonRow" type="HBoxContainer" parent="RoomPanel/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 12
+alignment = 1
+
+[node name="AddBotButton" type="Button" parent="RoomPanel/VBox/ButtonRow"]
+layout_mode = 2
+custom_minimum_size = Vector2(100, 36)
+text = "Add Bot"
+
+[node name="StartGameButton" type="Button" parent="RoomPanel/VBox/ButtonRow"]
+layout_mode = 2
+custom_minimum_size = Vector2(100, 36)
+text = "Start Game"
+disabled = true
+
+[node name="LeaveRoomButton" type="Button" parent="RoomPanel/VBox/ButtonRow"]
+layout_mode = 2
+custom_minimum_size = Vector2(100, 36)
+text = "Leave Room"
+
+[node name="Status" type="Label" parent="RoomPanel/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.7, 0.7, 0.7, 1)
+text = "Waiting for players..."
+horizontal_alignment = 1
+

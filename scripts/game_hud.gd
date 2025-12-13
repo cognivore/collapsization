@@ -1,5 +1,6 @@
 ## Game HUD - displays phase-specific UI for Mayor and Advisors.
-extends CanvasLayer
+## Now extends Control (not CanvasLayer) for proper GUI event flow.
+extends Control
 
 const MapLayers := preload("res://scripts/map_layers.gd")
 const GameRules := preload("res://scripts/game_rules.gd")
@@ -33,44 +34,37 @@ var _selected_card_index: int = -1
 var _selected_hex: Vector3i = INVALID_HEX
 var _action_panel := ActionPanel.new()
 
-# UI Root - tracks viewport size for proper resize handling
-@onready var _ui_root: Control = $UIRoot
-
-# Top panel
-@onready var _role_label: Label = $UIRoot/TopPanel/VBox/Role
-@onready var _phase_label: Label = $UIRoot/TopPanel/VBox/Phase
-@onready var _timer_label: Label = $UIRoot/TopPanel/VBox/Timer
-@onready var _scores_label: Label = $UIRoot/TopPanel/VBox/Scores
-@onready var _visibility_label: Label = $UIRoot/TopPanel/VBox/Visibility
-@onready var _status_label: Label = $UIRoot/TopPanel/VBox/Status
+# Top panel - paths updated for Control-based structure (no UIRoot)
+@onready var _role_label: Label = $TopPanel/VBox/Role
+@onready var _phase_label: Label = $TopPanel/VBox/Phase
+@onready var _timer_label: Label = $TopPanel/VBox/Timer
+@onready var _scores_label: Label = $TopPanel/VBox/Scores
+@onready var _visibility_label: Label = $TopPanel/VBox/Visibility
+@onready var _status_label: Label = $TopPanel/VBox/Status
 
 # Bottom panel
-@onready var _top_panel: MarginContainer = $UIRoot/TopPanel
-@onready var _bottom_panel: MarginContainer = $UIRoot/BottomPanel
-@onready var _hand_label: Label = $UIRoot/BottomPanel/CardPanel/VBox/HandLabel
-@onready var _hand_container: HBoxContainer = $UIRoot/BottomPanel/CardPanel/VBox/HandContainer
-@onready var _reveal_button: Button = $UIRoot/BottomPanel/CardPanel/VBox/ActionContainer/RevealButton
-@onready var _commit_button: Button = $UIRoot/BottomPanel/CardPanel/VBox/ActionContainer/ClaimButton
-@onready var _build_button: Button = $UIRoot/BottomPanel/CardPanel/VBox/ActionContainer/BuildButton
-@onready var _action_card: PanelContainer = $UIRoot/BottomPanel/CardPanel/VBox/ActionCard
-@onready var _action_reveal: Button = $UIRoot/BottomPanel/CardPanel/VBox/ActionCard/ActionButtons/ActionReveal
-@onready var _action_build: Button = $UIRoot/BottomPanel/CardPanel/VBox/ActionCard/ActionButtons/ActionBuild
-@onready var _action_cancel: Button = $UIRoot/BottomPanel/CardPanel/VBox/ActionCard/ActionButtons/ActionCancel
+@onready var _top_panel: MarginContainer = $TopPanel
+@onready var _bottom_panel: MarginContainer = $BottomPanel
+@onready var _hand_label: Label = $BottomPanel/CardPanel/VBox/HandLabel
+@onready var _hand_container: HBoxContainer = $BottomPanel/CardPanel/VBox/HandContainer
+@onready var _reveal_button: Button = $BottomPanel/CardPanel/VBox/ActionContainer/RevealButton
+@onready var _commit_button: Button = $BottomPanel/CardPanel/VBox/ActionContainer/ClaimButton
+@onready var _build_button: Button = $BottomPanel/CardPanel/VBox/ActionContainer/BuildButton
+@onready var _action_card: PanelContainer = $BottomPanel/CardPanel/VBox/ActionCard
+@onready var _action_reveal: Button = $BottomPanel/CardPanel/VBox/ActionCard/ActionButtons/ActionReveal
+@onready var _action_build: Button = $BottomPanel/CardPanel/VBox/ActionCard/ActionButtons/ActionBuild
+@onready var _action_cancel: Button = $BottomPanel/CardPanel/VBox/ActionCard/ActionButtons/ActionCancel
 
 var _card_buttons: Array[Button] = []
-var _click_indicator: ColorRect
-var _click_tween: Tween
 
 # Debug overlay
 var _debug_panel: Control
 var _debug_labels: Dictionary = {}
 var _debug_enabled := false
-var _last_click_screen: Vector2 = Vector2.ZERO
-var _last_click_world: Vector2 = Vector2.ZERO
 var _last_click_cube: Vector3i = Vector3i(0x7FFFFFFF, 0, 0)
 var _last_input_summary: String = ""
 
-# Dynamic HUD outline (follows actual CardPanel position)
+# Dynamic HUD outline (follows actual CardPanel position) - debug only
 var _hud_outline: Panel
 
 func _debug_log(msg: String) -> void:
@@ -89,6 +83,10 @@ func _debug_warn(msg: String) -> void:
 func _ready() -> void:
 	_debug_enabled = debug_logging
 	_debug_log("$$$ GameHud._ready() START $$$")
+
+	# Set mouse filter so clicks pass through to world when not on UI elements
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
+
 	_bind_manager()
 	_bind_hex_field()
 	_debug_log("$$$ GameHud._ready() BOUND $$$")
@@ -97,6 +95,7 @@ func _ready() -> void:
 		_connect_signals()
 		_refresh_all()
 
+	# Connect button signals - the Godot way (no manual hit testing!)
 	_reveal_button.pressed.connect(_on_reveal_pressed)
 	_commit_button.pressed.connect(_on_commit_pressed)
 	_build_button.pressed.connect(_on_build_pressed)
@@ -104,53 +103,14 @@ func _ready() -> void:
 	_action_build.pressed.connect(_on_build_pressed)
 	_action_cancel.pressed.connect(_on_cancel_pressed)
 
-	# Enable input processing
-	set_process_input(true)
-	_debug_log("GameHud: Input processing enabled: %s" % is_processing_input())
-
-	# Handle viewport resize - UIRoot must track viewport size for proper UI positioning
-	get_viewport().size_changed.connect(_on_viewport_resized)
-	_on_viewport_resized() # Initialize size
-
 	# Log rects after a frame so layout is complete
-	call_deferred("_log_ui_rects")
+	if debug_logging:
+		call_deferred("_log_ui_rects")
 
-	_init_click_indicator()
 	_init_debug_overlay()
 	_init_hud_outline()
 
 	_update_ui()
-
-
-func _on_viewport_resized() -> void:
-	# UIRoot must fill the viewport for anchored children to position correctly
-	var vp_size := get_viewport().get_visible_rect().size
-	if _ui_root:
-		_ui_root.size = vp_size
-		_debug_log("GameHud: UIRoot resized to %s" % vp_size)
-		# Log UI positions after layout update
-		call_deferred("_log_resize_positions")
-
-
-func _log_resize_positions() -> void:
-	# Log positions after layout update for debugging
-	var bp := get_node_or_null("UIRoot/BottomPanel")
-	if bp:
-		_debug_log("GameHud: After resize - BottomPanel global_pos=%s size=%s" % [bp.global_position, bp.size])
-		for i in range(_card_buttons.size()):
-			var btn: Button = _card_buttons[i]
-			_debug_log("GameHud: After resize - CardButton[%d] global_pos=%s size=%s" % [i, btn.global_position, btn.size])
-
-
-func _init_click_indicator() -> void:
-	# Small red rectangle to visualize mouse clicks
-	_click_indicator = ColorRect.new()
-	_click_indicator.size = Vector2(24, 24)
-	_click_indicator.color = Color(1, 0, 0, 0.65)
-	_click_indicator.visible = false
-	_click_indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_click_indicator.z_index = 200
-	add_child(_click_indicator)
 
 
 func _init_debug_overlay() -> void:
@@ -171,10 +131,12 @@ func _init_debug_overlay() -> void:
 
 func _init_hud_outline() -> void:
 	# Create a dynamic outline that follows the actual CardPanel position
+	# Only visible in debug mode
 	_hud_outline = Panel.new()
 	_hud_outline.name = "DynamicHudOutline"
 	_hud_outline.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_hud_outline.z_index = 100
+	_hud_outline.visible = _debug_enabled # Hidden by default
 
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color(0, 0, 0, 0) # Transparent fill
@@ -193,12 +155,9 @@ func _init_hud_outline() -> void:
 
 
 func _process(_delta: float) -> void:
-	_update_hud_outline()
-
-	if not _debug_enabled or _debug_panel == null:
-		return
-
-	_update_debug_overlay()
+	if _debug_enabled:
+		_update_hud_outline()
+		_update_debug_overlay()
 
 
 func _update_hud_outline() -> void:
@@ -222,6 +181,9 @@ func _update_hud_outline() -> void:
 
 
 func _update_debug_overlay() -> void:
+	if _debug_panel == null or _debug_labels.is_empty():
+		return
+
 	var viewport := get_viewport()
 	if viewport == null:
 		return
@@ -282,11 +244,11 @@ func _log_ui_rects() -> void:
 	_debug_log("=== HUD UI RECTS ===")
 	_debug_log("  Viewport: %s" % get_viewport().get_visible_rect())
 	_debug_log("  Window: %s" % DisplayServer.window_get_size())
-	_debug_log("  UIRoot rect: %s" % _get_global_rect(_ui_root))
-	_debug_log("  BottomPanel rect: %s" % _get_global_rect($UIRoot/BottomPanel))
-	_debug_log("  CardPanel rect: %s" % _get_global_rect($UIRoot/BottomPanel/CardPanel))
+	_debug_log("  GameHud rect: %s" % _get_global_rect(self))
+	_debug_log("  BottomPanel rect: %s" % _get_global_rect($BottomPanel))
+	_debug_log("  CardPanel rect: %s" % _get_global_rect($BottomPanel/CardPanel))
 	_debug_log("  HandContainer rect: %s" % _get_global_rect(_hand_container))
-	_debug_log("  ActionContainer rect: %s" % _get_global_rect($UIRoot/BottomPanel/CardPanel/VBox/ActionContainer))
+	_debug_log("  ActionContainer rect: %s" % _get_global_rect($BottomPanel/CardPanel/VBox/ActionContainer))
 	_debug_log("  RevealButton rect: %s, visible=%s" % [_get_global_rect(_reveal_button), _reveal_button.visible])
 	_debug_log("  BuildButton rect: %s, visible=%s" % [_get_global_rect(_build_button), _build_button.visible])
 	for i in range(_card_buttons.size()):
@@ -561,7 +523,8 @@ func _rebuild_card_buttons(hand: Array, revealed_index: int) -> void:
 		_card_buttons.append(btn)
 
 	# Log button positions after they're added to scene
-	call_deferred("_log_card_button_positions")
+	if debug_logging:
+		call_deferred("_log_card_button_positions")
 
 
 func _get_hand_instruction() -> String:
@@ -647,6 +610,7 @@ func _on_card_gui_input(event: InputEvent, index: int) -> void:
 		if event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 			_debug_log("GameHud: Card %d LEFT CLICK DETECTED!" % index)
 			_on_card_button_pressed(index)
+			accept_event()
 
 
 func _on_card_button_pressed(index: int) -> void:
@@ -768,27 +732,94 @@ func _update_status_for_phase(phase: int) -> void:
 		4: # GAME_OVER
 			pass # Handled by _on_game_over
 
+# ─────────────────────────────────────────────────────────────────────────────
+# MANUAL CLICK DETECTION (workaround for Godot 4.5 content scaling bug)
+# ─────────────────────────────────────────────────────────────────────────────
 
 func _input(event: InputEvent) -> void:
-	if event is InputEventMouseButton:
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		var mb := event as InputEventMouseButton
-		_last_input_summary = "MB%d %s" % [mb.button_index, "DOWN" if mb.pressed else "UP"]
-		# Check against actual visible panels, not full-screen UIRoot
-		if _is_click_on_hud_panels(mb.position):
-			_handle_hud_mouse_button(event)
-		else:
-			_handle_world_mouse_button(event)
+		var pos: Vector2 = mb.position
 
+		# Check card buttons first
+		for i in range(_card_buttons.size()):
+			var btn: Button = _card_buttons[i]
+			if btn and btn.visible and not btn.disabled and btn.get_global_rect().has_point(pos):
+				_on_card_button_pressed(i)
+				get_viewport().set_input_as_handled()
+				return
+
+		# Check action buttons
+		if _reveal_button and _reveal_button.visible and not _reveal_button.disabled:
+			if _reveal_button.get_global_rect().has_point(pos):
+				_debug_log("GameHud: Manual click on Reveal button")
+				_on_reveal_pressed()
+				get_viewport().set_input_as_handled()
+				return
+
+		if _commit_button and _commit_button.visible and not _commit_button.disabled:
+			if _commit_button.get_global_rect().has_point(pos):
+				_debug_log("GameHud: Manual click on Commit button")
+				_on_commit_pressed()
+				get_viewport().set_input_as_handled()
+				return
+
+		if _build_button and _build_button.visible and not _build_button.disabled:
+			if _build_button.get_global_rect().has_point(pos):
+				_on_build_pressed()
+				get_viewport().set_input_as_handled()
+				return
+
+		# Check action card buttons
+		if _action_card and _action_card.visible:
+			if _action_reveal and _action_reveal.visible and not _action_reveal.disabled:
+				if _action_reveal.get_global_rect().has_point(pos):
+					_debug_log("GameHud: Manual click on ActionReveal button")
+					_on_reveal_pressed()
+					get_viewport().set_input_as_handled()
+					return
+
+			if _action_build and _action_build.visible and not _action_build.disabled:
+				if _action_build.get_global_rect().has_point(pos):
+					_debug_log("GameHud: Manual click on ActionBuild button")
+					_on_build_pressed()
+					get_viewport().set_input_as_handled()
+					return
+
+			if _action_cancel and _action_cancel.visible:
+				if _action_cancel.get_global_rect().has_point(pos):
+					_debug_log("GameHud: Manual click on Cancel button")
+					_on_cancel_pressed()
+					get_viewport().set_input_as_handled()
+					return
+
+		# No UI element hit - route click to hex field directly
+		# (Godot's _unhandled_input doesn't receive pressed=true events reliably
+		# when GameHud is inside a CanvasLayer)
+		if _hex_field and _hex_field.has_method("handle_external_click"):
+			_hex_field.handle_external_click()
+			get_viewport().set_input_as_handled()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# KEYBOARD INPUT (via _unhandled_input, not _input)
+# ─────────────────────────────────────────────────────────────────────────────
+
+func _unhandled_input(event: InputEvent) -> void:
+	# Right-click to cancel selection
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
 		_selected_card_index = -1
 		_clear_hex_selection()
 		_update_ui()
+		get_viewport().set_input_as_handled()
+		return
 
 	if event is InputEventKey and event.pressed:
 		var ke := event as InputEventKey
 		_debug_log("GameHud: Key pressed: %s" % ke.as_text())
 		_last_input_summary = "KEY %s" % ke.as_text()
 
+		var handled := true
 		match ke.keycode:
 			KEY_1:
 				_select_card(0)
@@ -805,109 +836,17 @@ func _input(event: InputEvent) -> void:
 			KEY_ESCAPE:
 				_on_cancel_pressed()
 			KEY_F3:
+				# Toggle debug panel visibility (logging is now via --debug-log flag)
 				_debug_enabled = not _debug_enabled
-				DebugLogger.enabled = _debug_enabled
 				if _debug_panel:
 					_debug_panel.visible = _debug_enabled
+				if _hud_outline:
+					_hud_outline.visible = _debug_enabled
+			_:
+				handled = false
 
-
-## Check if click position is within any visible HUD panel
-func _is_click_on_hud_panels(screen_pos: Vector2) -> bool:
-	if _top_panel and _top_panel.get_global_rect().has_point(screen_pos):
-		return true
-	if _bottom_panel and _bottom_panel.get_global_rect().has_point(screen_pos):
-		return true
-	return false
-
-
-func _handle_hud_mouse_button(event: InputEvent) -> void:
-	var mb := event as InputEventMouseButton
-	if mb == null:
-		return
-	if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
-		_show_click_indicator(mb.position)
-		_record_click_coordinates(mb.position)
-		if _try_click_card_button(mb.position):
+		if handled:
 			get_viewport().set_input_as_handled()
-
-
-func _handle_world_mouse_button(event: InputEvent) -> void:
-	var mb := event as InputEventMouseButton
-	if mb == null:
-		return
-	if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
-		_show_click_indicator(mb.position)
-		_record_click_coordinates(mb.position)
-		if _hex_field and _hex_field.has_method("handle_external_click"):
-			_hex_field.handle_external_click()
-			get_viewport().set_input_as_handled()
-
-
-func _record_click_coordinates(screen_pos: Vector2) -> void:
-	_last_click_screen = screen_pos
-	var viewport := get_viewport()
-	var cam := viewport.get_camera_2d() if viewport else null
-
-	if cam:
-		_last_click_world = cam.get_global_mouse_position()
-	else:
-		_last_click_world = screen_pos
-
-	if _hex_field and _hex_field.has_method("to_local") and _hex_field.has_method("get_closest_cell_from_local"):
-		var local_pos: Vector2 = _hex_field.to_local(_last_click_world)
-		_last_click_cube = _hex_field.get_closest_cell_from_local(local_pos)
-		# Verify it's a valid hex
-		if _hex_field.has_method("cube_to_map") and _hex_field.has_method("get_cell_source_id"):
-			var map_pos = _hex_field.cube_to_map(_last_click_cube)
-			if _hex_field.get_cell_source_id(map_pos) == -1:
-				_last_click_cube = Vector3i(0x7FFFFFFF, 0, 0)
-
-
-func _log_card_button_positions() -> void:
-	_debug_log("=== Card Button Positions ===")
-	for i in range(_card_buttons.size()):
-		var btn: Button = _card_buttons[i]
-		var rect := Rect2(btn.global_position, btn.size)
-		_debug_log("  CardButton[%d] global_pos=%s size=%s rect=%s" % [i, btn.global_position, btn.size, rect])
-	# Also log action buttons
-	_debug_log("=== Action Button Positions ===")
-	_debug_log("  RevealButton: global_pos=%s size=%s visible=%s" % [_reveal_button.global_position, _reveal_button.size, _reveal_button.visible])
-	_debug_log("  CommitButton: global_pos=%s size=%s visible=%s" % [_commit_button.global_position, _commit_button.size, _commit_button.visible])
-	_debug_log("  BuildButton: global_pos=%s size=%s visible=%s" % [_build_button.global_position, _build_button.size, _build_button.visible])
-
-
-func _try_click_card_button(click_pos: Vector2) -> bool:
-	# Manual hit testing for card buttons since CanvasLayer GUI events are unreliable
-	# Returns true if a button was hit (to allow consuming the event)
-	for i in range(_card_buttons.size()):
-		var btn: Button = _card_buttons[i]
-		var rect := Rect2(btn.global_position, btn.size)
-		if rect.has_point(click_pos):
-			_debug_log("GameHud: Manual hit test - click at %s hit CardButton[%d] rect=%s" % [click_pos, i, rect])
-			_on_card_button_pressed(i)
-			return true
-
-	# Check action buttons (REVEAL, COMMIT, BUILD)
-	var action_buttons: Array[Array] = [
-		[_reveal_button, "_on_reveal_pressed"],
-		[_commit_button, "_on_commit_pressed"],
-		[_build_button, "_on_build_pressed"],
-		[_action_reveal, "_on_reveal_pressed"],
-		[_action_build, "_on_build_pressed"],
-		[_action_cancel, "_on_cancel_pressed"],
-	]
-	for entry in action_buttons:
-		var btn: Button = entry[0]
-		var method: String = entry[1]
-		if btn and btn.visible and not btn.disabled:
-			var rect := Rect2(btn.global_position, btn.size)
-			if rect.has_point(click_pos):
-				_debug_log("GameHud: Manual hit test - click at %s hit %s rect=%s" % [click_pos, btn.text, rect])
-				call(method)
-				return true
-
-	# No button hit - this click should pass through to HexField
-	return false
 
 
 func _select_card(index: int) -> void:
@@ -927,33 +866,14 @@ func _clear_hex_selection() -> void:
 		_hex_field.show_selected_hex(INVALID_HEX)
 
 
-func _is_click_in_hud_area(click_pos: Vector2) -> bool:
-	# Check if click is within the BottomPanel bounds
-	var bottom_panel := get_node_or_null("UIRoot/BottomPanel")
-	if bottom_panel:
-		var rect := Rect2(bottom_panel.global_position, bottom_panel.size)
-		if rect.has_point(click_pos):
-			return true
-	# Also check TopPanel for debug overlay clicks
-	var top_panel := get_node_or_null("UIRoot/TopPanel")
-	if top_panel:
-		var rect := Rect2(top_panel.global_position, top_panel.size)
-		if rect.has_point(click_pos):
-			return true
-	return false
-
-
-func _show_click_indicator(pos: Vector2) -> void:
-	if _click_indicator == null:
-		return
-
-	_click_indicator.position = pos - _click_indicator.size * 0.5
-	_click_indicator.visible = true
-	_click_indicator.modulate = Color(1, 0, 0, 0.65)
-
-	if _click_tween and _click_tween.is_running():
-		_click_tween.kill()
-
-	_click_tween = create_tween()
-	_click_tween.tween_property(_click_indicator, "modulate:a", 0.0, 0.35)
-	_click_tween.tween_callback(func(): _click_indicator.visible = false)
+func _log_card_button_positions() -> void:
+	_debug_log("=== Card Button Positions ===")
+	for i in range(_card_buttons.size()):
+		var btn: Button = _card_buttons[i]
+		var rect := Rect2(btn.global_position, btn.size)
+		_debug_log("  CardButton[%d] global_pos=%s size=%s rect=%s" % [i, btn.global_position, btn.size, rect])
+	# Also log action buttons
+	_debug_log("=== Action Button Positions ===")
+	_debug_log("  RevealButton: global_pos=%s size=%s visible=%s" % [_reveal_button.global_position, _reveal_button.size, _reveal_button.visible])
+	_debug_log("  CommitButton: global_pos=%s size=%s visible=%s" % [_commit_button.global_position, _commit_button.size, _commit_button.visible])
+	_debug_log("  BuildButton: global_pos=%s size=%s visible=%s" % [_build_button.global_position, _build_button.size, _build_button.visible])

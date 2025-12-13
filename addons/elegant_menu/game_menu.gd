@@ -2,8 +2,10 @@ extends CanvasLayer
 
 signal menu_opened
 signal menu_closed
+signal multiplayer_requested
 
 const PlayerStateScript := preload("res://addons/netcode/player_state.gd")
+const LobbyScenePath := "res://ui/LobbyScene.tscn"
 
 @onready var menu_panel: PanelContainer = $MenuPanel
 @onready var main_menu: VBoxContainer = $MenuPanel/MarginContainer/MainMenu
@@ -172,9 +174,44 @@ func _on_resume_pressed() -> void:
 	close_menu()
 
 
+func _on_multiplayer_pressed() -> void:
+	close_menu()
+	# Signal that we want multiplayer - the scene manager will handle transition
+	multiplayer_requested.emit()
+	# Load lobby scene as overlay
+	_show_lobby()
+
+
 func _on_exit_pressed() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	get_tree().quit()
+
+
+var _lobby_instance: Control = null
+
+func _show_lobby() -> void:
+	if _lobby_instance:
+		_lobby_instance.queue_free()
+
+	var lobby_scene := load(LobbyScenePath) as PackedScene
+	if lobby_scene:
+		_lobby_instance = lobby_scene.instantiate()
+		get_tree().root.add_child(_lobby_instance)
+
+		# Connect to game_started signal to transition to game
+		if _lobby_instance.has_signal("game_started"):
+			_lobby_instance.game_started.connect(_on_lobby_game_started)
+
+
+func _on_lobby_game_started(room_id: String, players: Array) -> void:
+	print("GameMenu: Game started from lobby, room=%s, players=%s" % [room_id, players])
+	# Close lobby UI
+	if _lobby_instance:
+		_lobby_instance.queue_free()
+		_lobby_instance = null
+
+	# The game should already be running - just let it continue
+	# The DemoLauncher will handle the game state
 
 
 func _on_back_pressed() -> void:

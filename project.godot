@@ -10,16 +10,23 @@ config_version=5
 
 [application]
 
-config/name="Collapsization"
-run/main_scene="uid://cn1lu8olilord"
+config/name="Multiplayer Minesweeper"
+run/main_scene="res://ui/MainMenu.tscn"
 config/features=PackedStringArray("4.5", "Forward Plus")
 config/icon="res://icon.svg"
 
+[display]
+
+window/size/viewport_width=1920
+window/size/viewport_height=1080
+window/stretch/mode="canvas_items"
+window/stretch/aspect="keep"
+
 [autoload]
 
-InputLogger="*res://scripts/input_logger.gd"
+Log="*res://scripts/logger.gd"
+GameBus="*res://scripts/game_bus.gd"
 NetworkManager="*res://addons/netcode/network_manager.gd"
-NetworkLogger="*res://addons/netcode/network_logger.gd"
 DemoLauncher="*res://addons/netcode/demo_launcher.gd"
 GameMenu="*res://addons/elegant_menu/game_menu.tscn"
 

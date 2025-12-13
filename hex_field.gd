@@ -220,8 +220,9 @@ func _handle_hex_click() -> void:
 	DebugLogger.log("  Fogged: %s" % is_fogged)
 	DebugLogger.log("  Source ID: %d" % get_cell_source_id(cube_to_map(cube)))
 
-	# Draw a debug marker at the clicked location
-	_draw_click_marker(mouse_pos)
+	# Draw a debug marker at the clicked location (only in debug mode)
+	if DebugLogger.enabled:
+		_draw_click_marker(mouse_pos)
 
 	if cube != INVALID_HEX and get_cell_source_id(cube_to_map(cube)) != -1:
 		DebugLogger.log("HexField: Emitting hex_clicked for cube (%d,%d,%d)" % [cube.x, cube.y, cube.z])

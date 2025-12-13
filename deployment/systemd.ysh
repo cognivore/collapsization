@@ -1,0 +1,263 @@
+#!/usr/bin/env ysh
+# =============================================================================
+# Systemd Service Management
+# Configures and manages the game server systemd service
+# =============================================================================
+
+source-guard systemd.ysh || return 0
+
+source $_this_dir/lib/config.ysh
+source $_this_dir/lib/logging.ysh
+source $_this_dir/lib/ssh.ysh
+
+# -----------------------------------------------------------------------------
+# Service File Generation
+# -----------------------------------------------------------------------------
+
+proc get_service_file_content {
+  # Generate the systemd service file content
+  echo "[Unit]
+Description=$[SYSTEMD_CONFIG.description]
+After=network.target
+
+[Service]
+Type=simple
+User=$[CONFIG.service_user]
+Group=$[CONFIG.service_group]
+WorkingDirectory=$[CONFIG.install_dir]
+ExecStart=$[CONFIG.install_dir]/$[CONFIG.binary_name] --server --port $[CONFIG.game_port]
+Restart=always
+RestartSec=$[SYSTEMD_CONFIG.restart_sec]
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=$[CONFIG.install_dir]
+
+[Install]
+WantedBy=multi-user.target"
+}
+
+# -----------------------------------------------------------------------------
+# Service Installation
+# -----------------------------------------------------------------------------
+
+proc create_service_file {
+  log "Creating systemd service file"
+
+  var service_content = $(get_service_file_content)
+  var service_path = "/etc/systemd/system/$[SYSTEMD_CONFIG.service_name].service"
+
+  # Base64 encode for safe transmission
+  var content_b64 = ''
+  try {
+    setvar content_b64 = $(echo "$service_content" | base64 -w 0 2>/dev/null)
+  }
+  if test -z "$content_b64" {
+    # macOS fallback
+    setvar content_b64 = $(echo "$service_content" | base64)
+  }
+
+  var script = "
+set -e
+
+SERVICE_PATH='$service_path'
+SERVICE_CONTENT=\$(echo '$content_b64' | base64 -d)
+
+# Check if service file exists and matches
+if [ -f \"\$SERVICE_PATH\" ]; then
+  CURRENT_CONTENT=\$(cat \"\$SERVICE_PATH\")
+  if [ \"\$CURRENT_CONTENT\" = \"\$SERVICE_CONTENT\" ]; then
+    echo 'Service file unchanged'
+    exit 0
+  fi
+  echo 'Updating service file'
+else
+  echo 'Creating service file'
+fi
+
+# Write the service file
+echo \"\$SERVICE_CONTENT\" > \"\$SERVICE_PATH\"
+
+# Reload systemd
+systemctl daemon-reload
+
+echo 'Service file installed: \$SERVICE_PATH'
+"
+
+  ssh_exec_script "$script"
+  log_success "Service file created"
+}
+
+# -----------------------------------------------------------------------------
+# Service Control
+# -----------------------------------------------------------------------------
+
+proc enable_service {
+  log "Enabling and starting service: $[SYSTEMD_CONFIG.service_name]"
+
+  var script = "
+set -e
+
+SERVICE='$[SYSTEMD_CONFIG.service_name]'
+
+# Enable the service
+systemctl enable \"\$SERVICE\"
+
+# Start if not running, otherwise restart
+if systemctl is-active --quiet \"\$SERVICE\"; then
+  echo 'Service already running, restarting...'
+  systemctl restart \"\$SERVICE\"
+else
+  echo 'Starting service...'
+  systemctl start \"\$SERVICE\"
+fi
+
+# Wait and verify
+sleep 2
+
+if systemctl is-active --quiet \"\$SERVICE\"; then
+  echo 'Service is running'
+  systemctl status \"\$SERVICE\" --no-pager -l | head -15
+else
+  echo 'ERROR: Service failed to start'
+  journalctl -u \"\$SERVICE\" --no-pager -n 20
+  exit 1
+fi
+"
+
+  ssh_exec_script "$script"
+  log_success "Service enabled and running"
+}
+
+proc restart_service {
+  log "Restarting service: $[SYSTEMD_CONFIG.service_name]"
+
+  var script = "
+set -e
+
+SERVICE='$[SYSTEMD_CONFIG.service_name]'
+
+systemctl restart \"\$SERVICE\"
+
+sleep 2
+
+if systemctl is-active --quiet \"\$SERVICE\"; then
+  echo 'Service restarted successfully'
+else
+  echo 'ERROR: Service failed to restart'
+  journalctl -u \"\$SERVICE\" --no-pager -n 20
+  exit 1
+fi
+"
+
+  ssh_exec_script "$script"
+  log_success "Service restarted"
+}
+
+proc stop_service {
+  log "Stopping service: $[SYSTEMD_CONFIG.service_name]"
+
+  var script = "
+SERVICE='$[SYSTEMD_CONFIG.service_name]'
+
+if systemctl is-active --quiet \"\$SERVICE\"; then
+  systemctl stop \"\$SERVICE\"
+  echo 'Service stopped'
+else
+  echo 'Service was not running'
+fi
+"
+
+  ssh_exec_script "$script"
+  log_success "Service stopped"
+}
+
+proc service_status {
+  log "Checking service status: $[SYSTEMD_CONFIG.service_name]"
+
+  var script = "
+SERVICE='$[SYSTEMD_CONFIG.service_name]'
+
+echo '=== Service Status ==='
+systemctl status \"\$SERVICE\" --no-pager -l 2>/dev/null || echo 'Service not found'
+
+echo ''
+echo '=== Recent Logs ==='
+journalctl -u \"\$SERVICE\" --no-pager -n 20 2>/dev/null || echo 'No logs available'
+
+echo ''
+echo '=== Port Status ==='
+ss -ulnp | grep '$[CONFIG.game_port]' || echo 'Port $[CONFIG.game_port] not listening'
+"
+
+  ssh_exec_script "$script"
+}
+
+# -----------------------------------------------------------------------------
+# Main Configuration Function
+# -----------------------------------------------------------------------------
+
+proc configure_systemd {
+  log_section "Configuring Systemd Service"
+
+  create_service_file
+  enable_service
+
+  log_section "Systemd Configuration Complete"
+  log ""
+  log "Service: $[SYSTEMD_CONFIG.service_name]"
+  log "Status:  systemctl status $[SYSTEMD_CONFIG.service_name]"
+  log "Logs:    journalctl -u $[SYSTEMD_CONFIG.service_name] -f"
+}
+
+# -----------------------------------------------------------------------------
+# CLI Interface
+# -----------------------------------------------------------------------------
+
+proc systemd_main {
+  require_commands ssh
+
+  if test $# -lt 1 {
+    configure_systemd
+    return
+  }
+
+  var cmd = $1
+
+  case $cmd in
+    (configure)
+      configure_systemd
+      ;;
+    (create)
+      create_service_file
+      ;;
+    (enable)
+      enable_service
+      ;;
+    (restart)
+      restart_service
+      ;;
+    (stop)
+      stop_service
+      ;;
+    (status)
+      service_status
+      ;;
+    (*)
+      echo "Usage: $0 [configure|create|enable|restart|stop|status]"
+      return 1
+      ;;
+  esac
+}
+
+# Run if executed directly
+if is-main {
+  systemd_main @ARGV
+}
+
+

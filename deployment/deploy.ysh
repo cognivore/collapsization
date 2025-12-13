@@ -1,0 +1,272 @@
+#!/usr/bin/env ysh
+# =============================================================================
+# Collapsization Dedicated Server Deployment
+# Main orchestration script - thin wrapper around modular components
+# =============================================================================
+
+# Source all dependencies relative to this script's directory
+source $_this_dir/lib/config.ysh
+source $_this_dir/lib/logging.ysh
+source $_this_dir/lib/ssh.ysh
+source $_this_dir/dns.ysh
+source $_this_dir/build.ysh
+source $_this_dir/server.ysh
+source $_this_dir/systemd.ysh
+
+# -----------------------------------------------------------------------------
+# Pre-flight Checks
+# -----------------------------------------------------------------------------
+
+proc preflight {
+  log_section "Pre-flight Checks"
+
+  # Check required commands
+  require_commands ssh scp curl jq dig passveil unzip
+
+  # Verify passveil has porkbun credentials
+  log "Checking Porkbun credentials..."
+  var pv_ok = false
+  try {
+    passveil show porkbun.com/api > /dev/null 2>&1
+    setvar pv_ok = true
+  }
+  if not pv_ok {
+    log_error "Porkbun credentials not found in passveil"
+    log "Add them with: passveil add porkbun.com/api"
+    return 1
+  }
+
+  # Verify SSH connectivity
+  log "Checking SSH connectivity to $[CONFIG.ssh_host]..."
+  var ssh_ok = false
+  try {
+    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes "$[CONFIG.ssh_host]" "true" 2>/dev/null
+    setvar ssh_ok = true
+  }
+  if not ssh_ok {
+    log_error "Cannot connect to server: $[CONFIG.ssh_host]"
+    log "Ensure SSH key is configured and server is reachable"
+    return 1
+  }
+
+  log_success "All pre-flight checks passed"
+}
+
+# -----------------------------------------------------------------------------
+# Main Deploy Function
+# -----------------------------------------------------------------------------
+
+proc deploy {
+  var start_time = $(date +%s)
+
+  log_section "Collapsization Dedicated Server Deployment"
+  log ""
+  log "This will deploy:"
+  log "  1. Acquire server binary (GitHub release or local build)"
+  log "  2. Prepare server (user, firewall, directories)"
+  log "  3. Upload and install binary"
+  log "  4. Configure systemd service"
+  log "  5. Register DNS: $[CONFIG.domain]"
+  log ""
+  log "Server:   $[CONFIG.ssh_host]"
+  log "Domain:   $[CONFIG.domain]"
+  log "Port:     $[CONFIG.game_port]/$[CONFIG.game_protocol]"
+  log ""
+
+  # =========================================================================
+  # Step 1: Pre-flight Checks
+  # =========================================================================
+  log_section "Step 1/5: Pre-flight Checks"
+  preflight
+
+  # =========================================================================
+  # Step 2: Acquire Server Binary
+  # =========================================================================
+  log_section "Step 2/5: Acquiring Server Binary"
+  build_or_download
+
+  if test -z "$BUILD_PATH" {
+    log_error "No binary available"
+    return 1
+  }
+
+  log "Binary: $BUILD_PATH"
+
+  # =========================================================================
+  # Step 3: Prepare Remote Server
+  # =========================================================================
+  log_section "Step 3/5: Preparing Remote Server"
+  prepare_server
+
+  # =========================================================================
+  # Step 4: Deploy Binary
+  # =========================================================================
+  log_section "Step 4/5: Deploying Binary"
+  deploy_binary "$BUILD_PATH"
+
+  # =========================================================================
+  # Step 5: Configure Systemd & Start Service
+  # =========================================================================
+  log_section "Step 5/5: Configuring Systemd Service"
+  configure_systemd
+
+  # =========================================================================
+  # Step 6: DNS Registration
+  # =========================================================================
+  log_section "Step 6: Registering DNS"
+  dns_create $[CONFIG.server_ip]
+
+  # =========================================================================
+  # Summary
+  # =========================================================================
+  var end_time = $(date +%s)
+  var duration = end_time - start_time
+
+  log_section "Deployment Complete!"
+  log ""
+  log "╔══════════════════════════════════════════════════════════════════════════╗"
+  log "║                    MULTIPLAYER MINESWEEPER SERVER                        ║"
+  log "╠══════════════════════════════════════════════════════════════════════════╣"
+  log "║                                                                          ║"
+  log "║  Server:    $[CONFIG.ssh_host]"
+  log "║  Domain:    $[CONFIG.domain]"
+  log "║  Port:      $[CONFIG.game_port]/$[CONFIG.game_protocol]"
+  log "║                                                                          ║"
+  log "╠══════════════════════════════════════════════════════════════════════════╣"
+  log "║                                                                          ║"
+  log "║  Service Management:                                                     ║"
+  log "║    Status:  ssh $[CONFIG.ssh_host] systemctl status $[SYSTEMD_CONFIG.service_name]"
+  log "║    Logs:    ssh $[CONFIG.ssh_host] journalctl -u $[SYSTEMD_CONFIG.service_name] -f"
+  log "║    Restart: ssh $[CONFIG.ssh_host] systemctl restart $[SYSTEMD_CONFIG.service_name]"
+  log "║                                                                          ║"
+  log "╠══════════════════════════════════════════════════════════════════════════╣"
+  log "║                                                                          ║"
+  log "║  Connect in-game to: $[CONFIG.domain]:$[CONFIG.game_port]"
+  log "║                                                                          ║"
+  log "╚══════════════════════════════════════════════════════════════════════════╝"
+  log ""
+  log "Deployment completed in ${duration} seconds"
+}
+
+# -----------------------------------------------------------------------------
+# Other Commands
+# -----------------------------------------------------------------------------
+
+proc status {
+  log_section "Server Status"
+  check_server_status
+  service_status
+}
+
+proc redeploy {
+  # Quick redeploy: just build and upload, restart service
+  log_section "Redeploying Binary"
+
+  build_or_download
+
+  if test -z "$BUILD_PATH" {
+    log_error "No binary available"
+    return 1
+  }
+
+  deploy_binary "$BUILD_PATH"
+  restart_service
+
+  log_success "Redeploy complete"
+}
+
+proc destroy {
+  log_section "Stopping Service"
+  stop_service
+
+  log "Note: User, directories, and firewall rules not removed"
+  log "To fully clean up, SSH to the server and run:"
+  log "  systemctl disable $[SYSTEMD_CONFIG.service_name]"
+  log "  rm /etc/systemd/system/$[SYSTEMD_CONFIG.service_name].service"
+  log "  rm -rf $[CONFIG.install_dir]"
+  log "  userdel $[CONFIG.service_user]"
+}
+
+# -----------------------------------------------------------------------------
+# CLI Interface
+# -----------------------------------------------------------------------------
+
+proc usage {
+  echo "Collapsization Dedicated Server Deployment"
+  echo ""
+  echo "Usage: deploy.ysh [command]"
+  echo ""
+  echo "Commands:"
+  echo "  deploy      Full deployment (default)"
+  echo "  redeploy    Quick redeploy: build, upload, restart"
+  echo "  status      Check server and service status"
+  echo "  destroy     Stop service (manual cleanup required)"
+  echo ""
+  echo "Individual operations:"
+  echo "  preflight   Run pre-flight checks only"
+  echo "  build       Build/download binary only"
+  echo "  prepare     Prepare server only (user, firewall, dirs)"
+  echo "  systemd     Configure systemd only"
+  echo "  dns         Configure DNS only"
+  echo ""
+  echo "Options:"
+  echo "  -h, --help  Show this help text"
+}
+
+proc main {
+  if test $# -lt 1 {
+    deploy
+    return
+  }
+
+  var cmd = $1
+  shift
+
+  case $cmd in
+    (deploy)
+      deploy
+      ;;
+    (redeploy)
+      redeploy
+      ;;
+    (status)
+      status
+      ;;
+    (destroy)
+      destroy
+      ;;
+    (preflight)
+      preflight
+      ;;
+    (build)
+      build_or_download
+      echo "Binary: $BUILD_PATH"
+      ;;
+    (prepare)
+      prepare_server
+      ;;
+    (systemd)
+      configure_systemd
+      ;;
+    (dns)
+      dns_create $[CONFIG.server_ip]
+      ;;
+    (-h|--help)
+      usage
+      ;;
+    (*)
+      echo "Unknown command: $cmd" >&2
+      usage >&2
+      return 1
+      ;;
+  esac
+}
+
+# -----------------------------------------------------------------------------
+# Entry Point
+# -----------------------------------------------------------------------------
+
+if is-main {
+  main @ARGV
+}
+

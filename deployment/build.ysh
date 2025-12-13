@@ -1,0 +1,242 @@
+#!/usr/bin/env ysh
+# =============================================================================
+# Build / Download Game Server Binary
+# Tries GitHub release first, falls back to local Godot export
+# =============================================================================
+
+source-guard build.ysh || return 0
+
+source $_this_dir/lib/config.ysh
+source $_this_dir/lib/logging.ysh
+
+# Global: path to the built/downloaded binary
+setglobal BUILD_PATH = ''
+
+# -----------------------------------------------------------------------------
+# GitHub Release Download
+# -----------------------------------------------------------------------------
+
+proc get_latest_release_url {
+  # Get the download URL for the latest release asset
+  var api_url = "https://api.github.com/repos/$[CONFIG.github_org]/$[CONFIG.github_repo]/releases/latest"
+
+  var response = ''
+  try {
+    setvar response = $(curl -sS "$api_url" 2>/dev/null)
+  }
+
+  if test -z "$response" {
+    return 1
+  }
+
+  # Check if we got a valid release
+  var tag = $(echo "$response" | jq -r '.tag_name // empty')
+  if test -z "$tag" {
+    return 1
+  }
+
+  # Find the asset URL
+  var asset_url = $(echo "$response" | jq -r \
+    --arg name "$[CONFIG.release_asset_name]" \
+    '.assets[] | select(.name == $name) | .browser_download_url // empty')
+
+  if test -z "$asset_url" {
+    return 1
+  }
+
+  echo "$asset_url"
+  return 0
+}
+
+proc try_github_release {
+  log_section "Checking GitHub Releases"
+
+  var release_url = ''
+  try {
+    setvar release_url = $(get_latest_release_url)
+  }
+
+  if test -z "$release_url" {
+    log "No GitHub release found for $[CONFIG.github_org]/$[CONFIG.github_repo]"
+    return 1
+  }
+
+  log "Found release: $release_url"
+
+  # Create temp directory for download
+  var tmp_dir = $(mktemp -d)
+  var zip_path = "$tmp_dir/$[CONFIG.release_asset_name]"
+  var extract_dir = "$tmp_dir/extracted"
+
+  log "Downloading release..."
+  try {
+    curl -sS -L -o "$zip_path" "$release_url"
+  }
+
+  if ! test -f "$zip_path" {
+    log_error "Failed to download release"
+    rm -rf "$tmp_dir"
+    return 1
+  }
+
+  log "Extracting..."
+  mkdir -p "$extract_dir"
+  unzip -q "$zip_path" -d "$extract_dir"
+
+  # Find the binary
+  var binary_path = $(find "$extract_dir" -name "$[CONFIG.binary_name]" -type f | head -1)
+
+  if test -z "$binary_path" {
+    log_error "Binary $[CONFIG.binary_name] not found in release archive"
+    rm -rf "$tmp_dir"
+    return 1
+  }
+
+  # Move binary to a stable location
+  var final_path = "$tmp_dir/$[CONFIG.binary_name]"
+  mv "$binary_path" "$final_path"
+  chmod +x "$final_path"
+
+  setglobal BUILD_PATH = "$final_path"
+  log_success "Downloaded server binary from GitHub release"
+  return 0
+}
+
+# -----------------------------------------------------------------------------
+# Local Godot Build
+# -----------------------------------------------------------------------------
+
+proc build_local {
+  log_section "Building Server Locally"
+
+  # Check if Godot is available
+  var godot_cmd = ''
+
+  # Try different Godot command names
+  if command -v godot > /dev/null 2>&1 {
+    setvar godot_cmd = 'godot'
+  } elif command -v godot4 > /dev/null 2>&1 {
+    setvar godot_cmd = 'godot4'
+  }
+
+  if test -z "$godot_cmd" {
+    log_error "Godot not found in PATH"
+    log "Please install Godot 4.x or add it to your PATH"
+    return 1
+  }
+
+  log "Using Godot: $godot_cmd"
+
+  # Navigate to project root (parent of deployment/)
+  var project_dir = "$_this_dir/.."
+  cd "$project_dir"
+
+  # Check for export_presets.cfg
+  if ! test -f "export_presets.cfg" {
+    log_error "export_presets.cfg not found"
+    log "Please configure export presets in Godot Editor first"
+    return 1
+  }
+
+  # Create build directory
+  var build_dir = "build/linux-server"
+  mkdir -p "$build_dir"
+
+  log "Exporting with preset: $[CONFIG.godot_export_preset]"
+
+  # Run the export
+  try {
+    $godot_cmd --headless --export-release "$[CONFIG.godot_export_preset]" "$[CONFIG.local_build_path]"
+  }
+
+  if ! test -f "$[CONFIG.local_build_path]" {
+    log_error "Export failed - binary not created"
+    return 1
+  }
+
+  chmod +x "$[CONFIG.local_build_path]"
+
+  # Use absolute path
+  setglobal BUILD_PATH = "$(pwd)/$[CONFIG.local_build_path]"
+  log_success "Built server binary: $BUILD_PATH"
+  return 0
+}
+
+# -----------------------------------------------------------------------------
+# Main Build Function
+# -----------------------------------------------------------------------------
+
+proc build_or_download {
+  log_section "Acquiring Server Binary"
+
+  # Try GitHub release first
+  var gh_ok = false
+  try {
+    try_github_release
+    setvar gh_ok = true
+  }
+
+  if (gh_ok) {
+    log "Using binary from GitHub release"
+    return 0
+  }
+
+  # Fall back to local build
+  log "Falling back to local Godot export..."
+
+  var build_ok = false
+  try {
+    build_local
+    setvar build_ok = true
+  }
+
+  if (build_ok) {
+    log "Using locally built binary"
+    return 0
+  }
+
+  log_error "Failed to acquire server binary"
+  log ""
+  log "Options:"
+  log "  1. Create a GitHub release with the server binary"
+  log "  2. Install Godot and run: godot --headless --export-release '$[CONFIG.godot_export_preset]'"
+  exit 1
+}
+
+# -----------------------------------------------------------------------------
+# CLI Interface
+# -----------------------------------------------------------------------------
+
+proc build_main {
+  require_commands curl jq unzip
+
+  if test $# -lt 1 {
+    build_or_download
+    return
+  }
+
+  var cmd = $1
+
+  case $cmd in
+    (github)
+      try_github_release
+      ;;
+    (local)
+      build_local
+      ;;
+    (*)
+      build_or_download
+      ;;
+  esac
+
+  if test -n "$BUILD_PATH" {
+    echo ""
+    echo "Binary path: $BUILD_PATH"
+  }
+}
+
+# Run if executed directly
+if is-main {
+  build_main @ARGV
+}
+

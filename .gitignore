@@ -9,3 +9,28 @@ logs/
 *.log
 
 *.txt
+
+# Nix / direnv
+.direnv/
+result
+result-*
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Build artifacts
+*.zip
+
+# OS generated
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini

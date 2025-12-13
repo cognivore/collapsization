@@ -1,0 +1,225 @@
+[gd_scene load_steps=4 format=3 uid="uid://cmainmenuscene1"]
+
+[ext_resource type="Script" path="res://ui/main_menu.gd" id="1_script"]
+[ext_resource type="Theme" uid="uid://bav626xe3lbvn" path="res://addons/elegant_menu/elegant_theme.tres" id="2_theme"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_title_panel"]
+bg_color = Color(0.06, 0.07, 0.09, 0.9)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.25, 0.4, 0.35, 0.8)
+corner_radius_top_left = 12
+corner_radius_top_right = 12
+corner_radius_bottom_right = 12
+corner_radius_bottom_left = 12
+shadow_color = Color(0, 0, 0, 0.4)
+shadow_size = 16
+
+[node name="MainMenu" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 1
+theme = ExtResource("2_theme")
+script = ExtResource("1_script")
+
+[node name="Background" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.04, 0.05, 0.07, 1)
+
+[node name="HexPattern" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.08, 0.12, 0.1, 0.3)
+
+[node name="CenterContainer" type="CenterContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 1
+
+[node name="MenuPanel" type="PanelContainer" parent="CenterContainer"]
+custom_minimum_size = Vector2(400, 0)
+layout_mode = 2
+mouse_filter = 1
+theme_override_styles/panel = SubResource("StyleBoxFlat_title_panel")
+
+[node name="MarginContainer" type="MarginContainer" parent="CenterContainer/MenuPanel"]
+layout_mode = 2
+mouse_filter = 1
+theme_override_constants/margin_left = 40
+theme_override_constants/margin_top = 40
+theme_override_constants/margin_right = 40
+theme_override_constants/margin_bottom = 40
+
+[node name="VBox" type="VBoxContainer" parent="CenterContainer/MenuPanel/MarginContainer"]
+layout_mode = 2
+mouse_filter = 1
+theme_override_constants/separation = 16
+
+[node name="Title" type="Label" parent="CenterContainer/MenuPanel/MarginContainer/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.75, 0.9, 0.8, 1)
+theme_override_font_sizes/font_size = 32
+text = "MULTIPLAYER
+MINESWEEPER"
+horizontal_alignment = 1
+
+[node name="Subtitle" type="Label" parent="CenterContainer/MenuPanel/MarginContainer/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.5, 0.6, 0.55, 1)
+theme_override_font_sizes/font_size = 14
+text = "A strategic card game on hexagonal tiles"
+horizontal_alignment = 1
+
+[node name="Spacer1" type="Control" parent="CenterContainer/MenuPanel/MarginContainer/VBox"]
+custom_minimum_size = Vector2(0, 24)
+layout_mode = 2
+
+[node name="SingleplayerButton" type="Button" parent="CenterContainer/MenuPanel/MarginContainer/VBox"]
+custom_minimum_size = Vector2(0, 52)
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "Singleplayer"
+
+[node name="MultiplayerButton" type="Button" parent="CenterContainer/MenuPanel/MarginContainer/VBox"]
+custom_minimum_size = Vector2(0, 52)
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "Multiplayer"
+
+[node name="Spacer2" type="Control" parent="CenterContainer/MenuPanel/MarginContainer/VBox"]
+custom_minimum_size = Vector2(0, 8)
+layout_mode = 2
+
+[node name="SettingsButton" type="Button" parent="CenterContainer/MenuPanel/MarginContainer/VBox"]
+custom_minimum_size = Vector2(0, 44)
+layout_mode = 2
+text = "Settings"
+
+[node name="QuitButton" type="Button" parent="CenterContainer/MenuPanel/MarginContainer/VBox"]
+custom_minimum_size = Vector2(0, 44)
+layout_mode = 2
+text = "Quit"
+
+[node name="Spacer3" type="Control" parent="CenterContainer/MenuPanel/MarginContainer/VBox"]
+custom_minimum_size = Vector2(0, 16)
+layout_mode = 2
+
+[node name="Version" type="Label" parent="CenterContainer/MenuPanel/MarginContainer/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.4, 0.45, 0.42, 1)
+theme_override_font_sizes/font_size = 12
+text = "v0.1.0 - Development Build"
+horizontal_alignment = 1
+
+[node name="SettingsPanel" type="PanelContainer" parent="."]
+visible = false
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -200.0
+offset_top = -180.0
+offset_right = 200.0
+offset_bottom = 180.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="VBox" type="VBoxContainer" parent="SettingsPanel"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="MarginContainer" type="MarginContainer" parent="SettingsPanel/VBox"]
+layout_mode = 2
+theme_override_constants/margin_left = 24
+theme_override_constants/margin_top = 24
+theme_override_constants/margin_right = 24
+theme_override_constants/margin_bottom = 24
+
+[node name="SettingsContent" type="VBoxContainer" parent="SettingsPanel/VBox/MarginContainer"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Title" type="Label" parent="SettingsPanel/VBox/MarginContainer/SettingsContent"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 24
+text = "SETTINGS"
+horizontal_alignment = 1
+
+[node name="Spacer" type="Control" parent="SettingsPanel/VBox/MarginContainer/SettingsContent"]
+custom_minimum_size = Vector2(0, 8)
+layout_mode = 2
+
+[node name="PlayerColor" type="HBoxContainer" parent="SettingsPanel/VBox/MarginContainer/SettingsContent"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="SettingsPanel/VBox/MarginContainer/SettingsContent/PlayerColor"]
+custom_minimum_size = Vector2(120, 0)
+layout_mode = 2
+text = "Player Color"
+
+[node name="ColorOption" type="OptionButton" parent="SettingsPanel/VBox/MarginContainer/SettingsContent/PlayerColor"]
+custom_minimum_size = Vector2(140, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+item_count = 8
+popup/item_0/text = "Tan"
+popup/item_0/id = 0
+popup/item_1/text = "Blue"
+popup/item_1/id = 1
+popup/item_2/text = "Orange"
+popup/item_2/id = 2
+popup/item_3/text = "Green"
+popup/item_3/id = 3
+popup/item_4/text = "Lime"
+popup/item_4/id = 4
+popup/item_5/text = "Red"
+popup/item_5/id = 5
+popup/item_6/text = "Brown"
+popup/item_6/id = 6
+popup/item_7/text = "Maroon"
+popup/item_7/id = 7
+
+[node name="ColorPreview" type="ColorRect" parent="SettingsPanel/VBox/MarginContainer/SettingsContent/PlayerColor"]
+custom_minimum_size = Vector2(30, 0)
+layout_mode = 2
+color = Color(0.831373, 0.647059, 0.454902, 1)
+
+[node name="Spacer2" type="Control" parent="SettingsPanel/VBox/MarginContainer/SettingsContent"]
+custom_minimum_size = Vector2(0, 16)
+layout_mode = 2
+
+[node name="BackButton" type="Button" parent="SettingsPanel/VBox/MarginContainer/SettingsContent"]
+custom_minimum_size = Vector2(0, 44)
+layout_mode = 2
+text = "Back"
+
+[connection signal="pressed" from="CenterContainer/MenuPanel/MarginContainer/VBox/SingleplayerButton" to="." method="_on_singleplayer_pressed"]
+[connection signal="pressed" from="CenterContainer/MenuPanel/MarginContainer/VBox/MultiplayerButton" to="." method="_on_multiplayer_pressed"]
+[connection signal="pressed" from="CenterContainer/MenuPanel/MarginContainer/VBox/SettingsButton" to="." method="_on_settings_pressed"]
+[connection signal="pressed" from="CenterContainer/MenuPanel/MarginContainer/VBox/QuitButton" to="." method="_on_quit_pressed"]
+[connection signal="item_selected" from="SettingsPanel/VBox/MarginContainer/SettingsContent/PlayerColor/ColorOption" to="." method="_on_color_selected"]
+[connection signal="pressed" from="SettingsPanel/VBox/MarginContainer/SettingsContent/BackButton" to="." method="_on_back_pressed"]
+
