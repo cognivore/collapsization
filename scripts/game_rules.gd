@@ -31,29 +31,12 @@ static func is_valid_nomination(hex: Vector3i, built_hexes: Array) -> bool:
 	return is_on_playable_frontier(hex, built_hexes)
 
 
-## Check if all advisors have committed their nominations
-## Commits format: {role: {hex: Vector3i, claim: Dictionary}} or {role: Vector3i} (legacy)
+## Check if all advisors have committed their nominations (2 each)
+## Commits format: {role: Array of {hex: Vector3i, claim: Dictionary}}
 static func all_advisors_committed(commits: Dictionary) -> bool:
-	var ind_entry = commits.get("industry", {})
-	var urb_entry = commits.get("urbanist", {})
-
-	# Handle new format: {hex: Vector3i, claim: Dict}
-	var ind_hex: Vector3i = INVALID_HEX
-	var urb_hex: Vector3i = INVALID_HEX
-
-	if ind_entry is Dictionary:
-		ind_hex = ind_entry.get("hex", INVALID_HEX)
-	elif ind_entry is Vector3i:
-		ind_hex = ind_entry
-
-	if urb_entry is Dictionary:
-		urb_hex = urb_entry.get("hex", INVALID_HEX)
-	elif urb_entry is Vector3i:
-		urb_hex = urb_entry
-
-	var industry_committed: bool = ind_hex != INVALID_HEX
-	var urbanist_committed: bool = urb_hex != INVALID_HEX
-	return industry_committed and urbanist_committed
+	var ind_commits: Array = commits.get("industry", [])
+	var urb_commits: Array = commits.get("urbanist", [])
+	return ind_commits.size() >= 2 and urb_commits.size() >= 2
 
 
 ## Get all 6 adjacent hexes around a center
@@ -342,109 +325,168 @@ static func _value_to_rank(value: int) -> String:
 		_: return "7"
 
 
-## Calculate scores for a turn placement using distance-to-reality.
-## Nominations: {role: {hex: Vector3i, claim: Dictionary}} (legacy Vector3i also supported)
+## Calculate scores for a turn placement with bluff detection.
+## Nominations: Array of {hex: Vector3i, claim: Dictionary, advisor: String}
 ##
-## Scoring rules:
-## - Mayor scores 1 if placed suit matches reality suit AND chosen hex has minimal |value_diff|
-## - Advisors score 1 if Mayor builds on their nominated hex
-## - Same-hex tie: advisor with claim value closest to placed value wins; suit breaks exact ties
-## - Spade placement: Mayor gets 0, advisor with closest claim value still scores
+## Scoring process:
+## 1. Determine which advisor "owns" the chosen hex via tie-break (claim proximity)
+## 2. Apply bluff detection to that advisor:
+##    - Mayor TRUSTS (plays same suit as claim): +1
+##    - Mayor CALLS (plays different suit): +1 if honest, 0 if bluff caught
+## 3. SPADE REALITY: ALL nominators scored (+1 if warned, -2 if lied)
+## 4. Mayor scores 1 only if their choice achieves the minimum possible distance
+##    across ALL hand cards × ALL nominated hexes (truly optimal build)
 static func calculate_turn_scores(
 	placed_card: Dictionary,
 	chosen_hex: Vector3i,
-	nominations: Dictionary,
-	get_reality: Callable # func(hex: Vector3i) -> Dictionary
+	nominations: Array, # Array of {hex, claim, advisor}
+	get_reality: Callable, # func(hex: Vector3i) -> Dictionary
+	mayor_hand: Array = [] # All 4 cards Mayor had this turn (for optimal build check)
 ) -> Dictionary:
 	var scores := {"mayor": 0, "industry": 0, "urbanist": 0}
 
-	# Extract nomination entries
-	var ind_entry = nominations.get("industry", {})
-	var urb_entry = nominations.get("urbanist", {})
-	var industry_hex: Vector3i = INVALID_HEX
-	var urbanist_hex: Vector3i = INVALID_HEX
-	var industry_claim: Dictionary = {}
-	var urbanist_claim: Dictionary = {}
+	if nominations.is_empty():
+		return scores
 
-	if ind_entry is Dictionary:
-		industry_hex = ind_entry.get("hex", INVALID_HEX)
-		industry_claim = ind_entry.get("claim", {})
-	elif ind_entry is Vector3i:
-		industry_hex = ind_entry
-
-	if urb_entry is Dictionary:
-		urbanist_hex = urb_entry.get("hex", INVALID_HEX)
-		urbanist_claim = urb_entry.get("claim", {})
-	elif urb_entry is Vector3i:
-		urbanist_hex = urb_entry
-
+	# Collect unique hexes from all nominations
 	var candidate_hexes: Array[Vector3i] = []
-	if industry_hex != INVALID_HEX:
-		candidate_hexes.append(industry_hex)
-	if urbanist_hex != INVALID_HEX and urbanist_hex != industry_hex:
-		candidate_hexes.append(urbanist_hex)
+	for nom in nominations:
+		var hex: Vector3i = nom.get("hex", INVALID_HEX)
+		if hex != INVALID_HEX and hex not in candidate_hexes:
+			candidate_hexes.append(hex)
 
 	if candidate_hexes.is_empty():
 		return scores
 
-	var placed_value: int = placed_card.get("value", 0)
 	var placed_suit: int = placed_card.get("suit", -1)
-	var is_spade_placement: bool = (placed_suit == MapLayers.Suit.SPADES)
+	var placed_value: int = placed_card.get("value", 0)
 
-	# Compute distances to reality for each nominated hex (for Mayor scoring)
-	var min_valid_distance: int = INF # Only consider suit-matched distances
-	var chosen_distance: int = -1 # -1 = suit mismatch or not computed
+	# Get reality at chosen hex
+	var reality: Dictionary = get_reality.call(chosen_hex)
+	var reality_suit: int = reality.get("suit", -1)
+	var reality_is_spade: bool = is_spade(reality)
 
-	if not is_spade_placement:
-		for nom_hex in candidate_hexes:
-			var reality: Dictionary = get_reality.call(nom_hex)
-			if reality.is_empty():
+	# Find nominations for the chosen hex
+	var noms_for_hex: Array[Dictionary] = []
+	for nom in nominations:
+		if nom.get("hex", INVALID_HEX) == chosen_hex:
+			noms_for_hex.append(nom)
+
+	if noms_for_hex.is_empty():
+		return scores
+
+	# SPADE REALITY: Score ALL advisors who nominated this hex
+	if reality_is_spade:
+		var scored_advisors: Dictionary = {}
+		for nom in noms_for_hex:
+			var advisor: String = nom.get("advisor", "")
+			if advisor.is_empty() or scored_advisors.has(advisor):
 				continue
-
-			var dist := _card_distance(placed_card, reality)
-			# dist >= 0 means suits matched; -1 means suit mismatch
-			if dist >= 0 and dist < min_valid_distance:
-				min_valid_distance = dist
-
-			if nom_hex == chosen_hex:
-				chosen_distance = dist
-
-		# Mayor scores if they picked a hex with suit match AND minimal distance (ties okay)
-		if chosen_distance >= 0 and chosen_distance <= min_valid_distance:
-			scores["mayor"] = 1
-
-	# Advisor scoring: who gets the point for the chosen hex?
-	var ind_nominated: bool = (chosen_hex == industry_hex)
-	var urb_nominated: bool = (chosen_hex == urbanist_hex)
-
-	if ind_nominated and urb_nominated:
-		# Both nominated same hex - winner based on claim value proximity to placed value
-		var ind_claim_value: int = industry_claim.get("value", 0)
-		var urb_claim_value: int = urbanist_claim.get("value", 0)
-		var ind_diff: int = abs(ind_claim_value - placed_value)
-		var urb_diff: int = abs(urb_claim_value - placed_value)
-
-		if ind_diff < urb_diff:
-			scores["industry"] = 1
-		elif urb_diff < ind_diff:
-			scores["urbanist"] = 1
-		else:
-			# Equal claim distances - suit matching placed card wins
-			var ind_claim_suit: int = industry_claim.get("suit", -1)
-			var urb_claim_suit: int = urbanist_claim.get("suit", -1)
-			if ind_claim_suit == placed_suit:
-				scores["industry"] = 1
-			elif urb_claim_suit == placed_suit:
-				scores["urbanist"] = 1
+			var claim: Dictionary = nom.get("claim", {})
+			var claim_suit: int = claim.get("suit", -1)
+			if claim_suit == MapLayers.Suit.SPADES:
+				pass # Honest warning = 0 points (no reward for finding mines)
 			else:
-				# Neither claim suit matches - default to industry (arbitrary)
-				scores["industry"] = 1
-	else:
-		# Only one advisor nominated this hex
-		if ind_nominated:
-			scores["industry"] = 1
-		if urb_nominated:
-			scores["urbanist"] = 1
+				scores[advisor] -= 2 # Lied about mine, severe penalty
+			scored_advisors[advisor] = true
+		return scores
+
+	# NON-SPADE REALITY: Determine winning advisor via tie-break
+	var winning_nom: Dictionary = noms_for_hex[0]
+	var used_domain_affinity_for_spades: bool = false
+	if noms_for_hex.size() > 1:
+		# Tie-break: closest claim value, then suit match, then domain affinity
+		var best_diff: int = 999999
+		var best_suit_match: bool = false
+		var best_domain_match: bool = false
+		for nom in noms_for_hex:
+			var claim: Dictionary = nom.get("claim", {})
+			var claim_value: int = claim.get("value", 0)
+			var claim_suit: int = claim.get("suit", -1)
+			var advisor: String = nom.get("advisor", "")
+			var diff: int = abs(claim_value - placed_value)
+			var suit_match: bool = (claim_suit == placed_suit)
+			# Domain affinity: Hearts→Urbanist, Diamonds/Spades→Industry
+			var domain_match: bool = (
+				(claim_suit == MapLayers.Suit.HEARTS and advisor == "urbanist") or
+				(claim_suit in [MapLayers.Suit.DIAMONDS, MapLayers.Suit.SPADES] and advisor == "industry")
+			)
+
+			var dominated: bool = false
+			if diff < best_diff:
+				dominated = true
+			elif diff == best_diff:
+				if suit_match and not best_suit_match:
+					dominated = true
+				elif suit_match == best_suit_match:
+					if domain_match and not best_domain_match:
+						dominated = true
+
+			if dominated:
+				best_diff = diff
+				best_suit_match = suit_match
+				best_domain_match = domain_match
+				winning_nom = nom
+
+		# Check if domain affinity was used for Spades (both claimed same Spade card)
+		# This happens when both have same diff and same suit match status
+		var first_claim: Dictionary = noms_for_hex[0].get("claim", {})
+		var second_claim: Dictionary = noms_for_hex[1].get("claim", {}) if noms_for_hex.size() > 1 else {}
+		if first_claim.get("suit", -1) == MapLayers.Suit.SPADES and \
+		   first_claim.get("suit", -1) == second_claim.get("suit", -1) and \
+		   first_claim.get("value", -1) == second_claim.get("value", -1):
+			used_domain_affinity_for_spades = true
+
+	# Apply bluff detection scoring to the winning advisor
+	var advisor: String = winning_nom.get("advisor", "")
+	if not advisor.is_empty():
+		var claim: Dictionary = winning_nom.get("claim", {})
+		var claim_suit: int = claim.get("suit", -1)
+
+		# Spades domain affinity special case: if both advisors claimed
+		# identical Spades but reality is NOT Spades, both were lying
+		# about a mine - nobody scores (skip advisor scoring entirely)
+		if used_domain_affinity_for_spades and reality_suit != MapLayers.Suit.SPADES:
+			pass # No winner - both lied about mine
+		elif placed_suit == claim_suit:
+			# Mayor TRUSTED (played same suit as claimed)
+			scores[advisor] += 1
+		else:
+			# Mayor CALLED (played different suit than claimed)
+			if claim_suit == reality_suit:
+				# Advisor was honest but Mayor didn't believe them
+				scores[advisor] += 1
+			# else: Advisor bluffed AND Mayor caught it - 0 points
+
+	# MAYOR SCORING - optimal distance calculation
+	# Mayor scores only if they found the optimal build among ALL hand cards
+	if not reality_is_spade:
+		# Calculate the distance the Mayor actually achieved
+		var chosen_distance: int = _card_distance(placed_card, reality)
+
+		# Find the global minimum distance across ALL hand cards × ALL nominated hexes
+		# If mayor_hand is empty (legacy call), fall back to checking only placed_card
+		var cards_to_check: Array = mayor_hand if not mayor_hand.is_empty() else [placed_card]
+		var global_best_distance: int = 999999
+
+		for hand_card in cards_to_check:
+			var hand_suit: int = hand_card.get("suit", -1)
+			var hand_value: int = hand_card.get("value", 0)
+			for nom_hex in candidate_hexes:
+				var hex_reality: Dictionary = get_reality.call(nom_hex)
+				if hex_reality.is_empty():
+					continue
+				# Skip spade realities (game-ending)
+				if hex_reality.get("suit", -1) == MapLayers.Suit.SPADES:
+					continue
+				if hex_reality.get("suit", -1) == hand_suit:
+					var dist: int = abs(hand_value - hex_reality.get("value", 0))
+					if dist < global_best_distance:
+						global_best_distance = dist
+
+		# Mayor scores only if their choice equals the best possible
+		if chosen_distance >= 0 and chosen_distance <= global_best_distance:
+			scores["mayor"] = 1
 
 	return scores
 
@@ -465,13 +507,13 @@ static func is_spade(card: Dictionary) -> bool:
 	return card.get("suit", -1) == MapLayers.Suit.SPADES
 
 
-## Check if a hex was nominated by either advisor
-static func is_nominated_hex(hex: Vector3i, nominations: Dictionary) -> bool:
-	var industry_entry: Dictionary = nominations.get("industry", {})
-	var urbanist_entry: Dictionary = nominations.get("urbanist", {})
-	var industry_hex: Vector3i = industry_entry.get("hex", INVALID_HEX) if not industry_entry.is_empty() else INVALID_HEX
-	var urbanist_hex: Vector3i = urbanist_entry.get("hex", INVALID_HEX) if not urbanist_entry.is_empty() else INVALID_HEX
-	return hex == industry_hex or hex == urbanist_hex
+## Check if a hex was nominated by any advisor
+## Nominations: Array of {hex: Vector3i, claim: Dictionary, advisor: String}
+static func is_nominated_hex(hex: Vector3i, nominations: Array) -> bool:
+	for nom in nominations:
+		if nom.get("hex", INVALID_HEX) == hex:
+			return true
+	return false
 
 
 ## Validate card index is within hand range

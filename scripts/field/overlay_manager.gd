@@ -71,6 +71,9 @@ func get_label_position(points: Array[Vector2], role_key: String) -> Vector2:
 			push_warning("OverlayManager: expected 6 hex vertices, got %d" % points.size())
 		return center
 
+	# Handle indexed keys like "industry_0", "urbanist_1" by extracting base role
+	var base_role := _extract_base_role(role_key)
+
 	# Vertices go CLOCKWISE from TOP for pointy-top hex:
 	#   v0 = TOP (12 o'clock)
 	#   v1 = upper-RIGHT (2 o'clock)
@@ -78,7 +81,7 @@ func get_label_position(points: Array[Vector2], role_key: String) -> Vector2:
 	#   v3 = BOTTOM (6 o'clock)
 	#   v4 = lower-LEFT (8 o'clock)
 	#   v5 = upper-LEFT (10 o'clock)
-	match role_key:
+	match base_role:
 		"reality":
 			# TOP-LEFT triangle: center + upper-LEFT + TOP
 			return (center + points[5] + points[0]) / 3.0
@@ -90,6 +93,17 @@ func get_label_position(points: Array[Vector2], role_key: String) -> Vector2:
 			return (center + points[3] + points[4]) / 3.0
 		_:
 			return center # center for built tiles
+
+
+## Extract base role from potentially indexed key (e.g., "industry_0" -> "industry")
+func _extract_base_role(role_key: String) -> String:
+	if role_key.begins_with("industry"):
+		return "industry"
+	elif role_key.begins_with("urbanist"):
+		return "urbanist"
+	elif role_key.begins_with("reality"):
+		return "reality"
+	return role_key
 
 
 ## Create a styled label for hex overlays at specified position
@@ -284,17 +298,58 @@ func clear_nominations() -> void:
 
 func clear_nomination(role_key: String) -> void:
 	_clear_nomination(role_key)
+	# Also clear any indexed versions (e.g., "industry_0", "industry_1")
+	var keys_to_clear: Array = []
+	for key in _nomination_overlays.keys():
+		if key.begins_with(role_key + "_"):
+			keys_to_clear.append(key)
+	for key in keys_to_clear:
+		_clear_nomination(key)
+
+
+## Persist ONLY the nomination at a specific hex (for the winning advisor)
+## Called when Mayor builds - only the nomination on the built hex stays forever
+func persist_nomination_at_hex(role_key: String, hex: Vector3i) -> void:
+	# Find the nomination for this role at this specific hex
+	var keys_to_check: Array = [role_key]
+	for key in _nomination_overlays.keys():
+		if key.begins_with(role_key + "_"):
+			keys_to_check.append(key)
+
+	for key in keys_to_check:
+		if key not in _nomination_overlays:
+			continue
+		var data: Dictionary = _nomination_overlays[key]
+		if data.get("cube", Vector3i()) == hex:
+			# This is the winning nomination - persist it
+			_persisted_nominations[key + "_" + str(hex)] = data
+			_nomination_overlays.erase(key)
+			if debug_enabled:
+				print("OverlayManager: Persisted %s nomination at %s" % [key, hex])
+			return # Only one nomination per hex per role
 
 
 ## Persist a nomination so it won't be cleared by future show_nominations calls
 ## Called when Mayor builds on that tile - the winning advisor's claim stays forever
+## role_key can be "industry" or "urbanist", will persist all overlays for that advisor
 func persist_nomination(role_key: String) -> void:
+	# Try exact match first (legacy)
 	if role_key in _nomination_overlays:
-		# Move from temporary to permanent storage
 		_persisted_nominations[role_key + "_" + str(_nomination_overlays[role_key]["cube"])] = _nomination_overlays[role_key]
 		_nomination_overlays.erase(role_key)
 		if debug_enabled:
 			print("OverlayManager: Persisted %s nomination" % role_key)
+	# Also persist any indexed versions (e.g., "industry_0", "industry_1")
+	var keys_to_persist: Array = []
+	for key in _nomination_overlays.keys():
+		if key.begins_with(role_key + "_"):
+			keys_to_persist.append(key)
+	for key in keys_to_persist:
+		var data: Dictionary = _nomination_overlays[key]
+		_persisted_nominations[key + "_" + str(data["cube"])] = data
+		_nomination_overlays.erase(key)
+		if debug_enabled:
+			print("OverlayManager: Persisted %s nomination" % key)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

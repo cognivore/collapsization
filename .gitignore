@@ -9,6 +9,8 @@ logs/
 *.log
 
 *.txt
+!requirements.txt
+!requirements-training.txt
 
 # Nix / direnv
 .direnv/
@@ -24,6 +26,7 @@ yarn-error.log*
 
 # Build artifacts
 *.zip
+build/
 
 # OS generated
 .DS_Store
@@ -36,3 +39,8 @@ ehthumbs.db
 Desktop.ini
 
 *.pdf
+
+# Training
+training/.training-manager.state
+training/results/
+training/checkpoints/

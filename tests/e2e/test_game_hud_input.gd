@@ -16,11 +16,14 @@ class MockGameManager:
 
 	var phase := 3 # PLACE phase
 	var local_role := 0 # Mayor
-	var revealed_index := 0
-	var hand := [{"rank": "A", "suit": 0}]
+	var revealed_indices := [0, 1] # Mayor reveals 2 cards
+	var hand := [{"rank": "A", "suit": 0}, {"rank": "K", "suit": 1}]
+	var nominations := [] # Required by _refresh_all
+	var scores := {"mayor": 0, "industry": 0, "urbanist": 0} # Required by _refresh_all
+	var advisor_visibility := [] # Required by _refresh_all
 
-	var placed_card := null
-	var placed_hex := null
+	var placed_card: Variant = null
+	var placed_hex: Variant = null
 
 	func place_card(card_idx: int, cube: Vector3i) -> void:
 		placed_card = card_idx
@@ -98,10 +101,10 @@ func test_build_button_calls_place_card_when_card_and_hex_selected() -> void:
 	_hud.set("_selected_hex", Vector3i(1, -1, 0))
 	await get_tree().process_frame
 
-	# Click on the build button area (bottom center); button is at y~966 in 1920x1080
-	var build_click := _make_click(Vector2(960, 980), true)
-	_hud._input(build_click)
+	# Directly trigger build action via the internal method (pixel coords are fragile)
+	# This tests the actual logic path without depending on exact UI layout
+	_hud.call("_on_build_pressed")
+	await get_tree().process_frame
 
 	assert_eq(_gm.placed_card, 0, "place_card should be invoked with selected card")
 	assert_eq(_gm.placed_hex, Vector3i(1, -1, 0), "place_card should receive selected hex")
-

@@ -1,6 +1,9 @@
 extends RefCounted
 class_name NominatePhase
 
+## Sub-phase order: industry_commit_1 -> industry_commit_2 -> urbanist_commit_1 -> urbanist_commit_2 -> place_ready
+const SUB_PHASE_ORDER := ["industry_commit_1", "industry_commit_2", "urbanist_commit_1", "urbanist_commit_2", "place_ready"]
+
 ## Reset commits and emit updates.
 func enter(gm) -> void:
 	gm._reset_nominations_state()
@@ -9,22 +12,77 @@ func enter(gm) -> void:
 
 
 func commit(gm, role: int, hex: Vector3i, claimed_card: Dictionary = {}) -> void:
+	# #region agent log
+	gm._debug_log("H_C", "nominate_commit_entry", {"role": role, "hex": [hex.x, hex.y, hex.z], "claim": claimed_card, "sub_phase": gm._sub_phase, "phase": gm.Phase.keys()[gm.phase]})
+	# #endregion
 	if gm.phase != gm.Phase.NOMINATE:
+		# #region agent log
+		gm._debug_log("H_C", "nominate_commit_wrong_phase", {"current_phase": gm.Phase.keys()[gm.phase]})
+		# #endregion
 		return
+
+	# Validate sub-phase matches expected role
+	var expected_role := _get_expected_role(gm._sub_phase)
+	if role != expected_role:
+		# #region agent log
+		gm._debug_log("H_C", "nominate_commit_wrong_role", {"role": role, "expected": expected_role})
+		# #endregion
+		return
+
 	# is_valid_nomination checks: not invalid, not built, adjacent to any built hex
 	if not gm.GameRules.is_valid_nomination(hex, gm.built_hexes):
+		# #region agent log
+		gm._debug_log("H_C", "nominate_commit_invalid_hex", {"hex": [hex.x, hex.y, hex.z], "built_hexes": gm.built_hexes.map(func(h): return [h.x, h.y, h.z])})
+		# #endregion
 		return
 
 	var role_key: String = gm._role_to_key(role)
 	if role_key.is_empty():
 		return
 
-	gm.advisor_commits[role_key] = {"hex": hex, "claim": claimed_card}
+	# Prevent same hex twice for same advisor
+	for existing in gm.advisor_commits[role_key]:
+		if existing.get("hex") == hex:
+			# #region agent log
+			gm._debug_log("H_A", "nominate_commit_duplicate_hex", {"role": role_key, "hex": [hex.x, hex.y, hex.z], "existing_commits": gm.advisor_commits[role_key].map(func(c): return [c.hex.x, c.hex.y, c.hex.z])})
+			# #endregion
+			return # Already nominated this hex
+
+	# Append to array of nominations for this role
+	gm.advisor_commits[role_key].append({"hex": hex, "claim": claimed_card})
+	# #region agent log
+	gm._debug_log("H_C", "nominate_commit_success", {"role": role_key, "hex": [hex.x, hex.y, hex.z], "new_sub_phase": _next_sub_phase(gm._sub_phase), "total_commits": gm.advisor_commits[role_key].size()})
+	# #endregion
+
+	# Advance to next sub-phase
+	gm._sub_phase = _next_sub_phase(gm._sub_phase)
+
 	gm.commits_updated.emit(gm._get_commit_status())
 	gm._broadcast_state()
 
-	if gm._all_advisors_committed():
+	# Check if all nominations complete
+	if gm._sub_phase == "place_ready":
 		_reveal_and_transition(gm)
+	else:
+		# Trigger bot action for next advisor if needed
+		gm._trigger_bot_actions_if_needed()
+
+
+func _get_expected_role(sub_phase: String) -> int:
+	match sub_phase:
+		"industry_commit_1", "industry_commit_2":
+			return 1 # Role.INDUSTRY
+		"urbanist_commit_1", "urbanist_commit_2":
+			return 2 # Role.URBANIST
+		_:
+			return -1
+
+
+func _next_sub_phase(current: String) -> String:
+	var idx := SUB_PHASE_ORDER.find(current)
+	if idx >= 0 and idx < SUB_PHASE_ORDER.size() - 1:
+		return SUB_PHASE_ORDER[idx + 1]
+	return "place_ready"
 
 
 func _reveal_and_transition(gm) -> void:
@@ -34,3 +92,12 @@ func _reveal_and_transition(gm) -> void:
 func reveal_and_transition(gm) -> void:
 	_reveal_and_transition(gm)
 
+
+## Get current nomination count for a role
+func get_nomination_count(gm, role_key: String) -> int:
+	return gm.advisor_commits.get(role_key, []).size()
+
+
+## Check if it's a specific role's turn to nominate
+func is_role_turn(gm, role: int) -> bool:
+	return _get_expected_role(gm._sub_phase) == role

@@ -31,6 +31,7 @@ var client_index := 0
 var is_bot := false
 var is_demo_mode := true
 var is_singleplayer := true
+var use_rl_bots := false # Use in-process RL bots instead of spawned processes
 var lobby_port := DEFAULT_LOBBY_PORT
 
 var _spawned_pids: Array[int] = []
@@ -57,12 +58,18 @@ func _ready() -> void:
 
 func _parse_args() -> void:
 	var args := OS.get_cmdline_args()
+	var user_args := OS.get_cmdline_user_args() # Args after -- separator
 
 	# Skip if running tests
 	for arg in args:
 		if arg == "-s" or arg.ends_with("gut_cmdln.gd"):
 			role = Role.NONE
 			return
+
+	# Check for --rl-bots in user args (after -- separator)
+	if "--rl-bots" in user_args or "--rl-bots" in args:
+		use_rl_bots = true
+		Log.game("DemoLauncher: RL bots mode enabled")
 
 	# Parse command-line args (for dedicated server, bots, etc.)
 	for i in range(args.size()):
@@ -268,9 +275,15 @@ func _start_server(net_mgr: Node) -> void:
 			Log.game("DemoLauncher: Using random seed %d (multiplayer)" % gm.game_seed)
 		net_mgr.player_joined.connect(_on_player_joined_server)
 
-	# Spawn bot clients
-	await get_tree().create_timer(SPAWN_DELAY).timeout
-	_spawn_bots()
+	# Spawn bot clients (unless using RL bots which are in-process)
+	if not use_rl_bots:
+		await get_tree().create_timer(SPAWN_DELAY).timeout
+		_spawn_bots()
+	else:
+		Log.game("DemoLauncher: Skipping external bot spawn (using RL bots)")
+		# For RL bots, start game immediately after short delay
+		await get_tree().create_timer(SPAWN_DELAY).timeout
+		_start_game()
 
 	demo_ready.emit()
 
@@ -302,8 +315,13 @@ func _start_game() -> void:
 		hex_field.reinit_map_layers(seed_to_use)
 
 	if gm:
-		gm.start_game()
-		Log.game("DemoLauncher: Game started with seed %d!" % seed_to_use)
+		if is_singleplayer:
+			# Singleplayer: player is Mayor, advisors are bots
+			gm.start_singleplayer()
+			Log.game("DemoLauncher: Singleplayer started with seed %d!" % seed_to_use)
+		else:
+			gm.start_game()
+			Log.game("DemoLauncher: Multiplayer game started with seed %d!" % seed_to_use)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CLIENT (Manual testing)

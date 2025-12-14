@@ -507,30 +507,43 @@ func _nomination_color(role_key: String, _claim := {}) -> Color:
 # ─────────────────────────────────────────────────────────────────────────────
 
 ## Show nominated hexes on the map (called when nominations are revealed)
-## Nominations format: {role: {hex: Vector3i, claim: Dictionary}}
-func show_nominations(nominations: Dictionary) -> void:
+## Nominations format: Array of {hex: Vector3i, claim: Dictionary, advisor: String}
+func show_nominations(nominations: Array) -> void:
 	_clear_nominations()
 
-	for role_key in nominations.keys():
-		var nom_data: Dictionary = nominations[role_key]
-		if nom_data.is_empty():
+	var idx := 0
+	for nom_data in nominations:
+		if not (nom_data is Dictionary):
 			continue
 
 		var cube: Vector3i = nom_data.get("hex", INVALID_HEX)
 		if cube == INVALID_HEX:
 			continue
 
+		var advisor: String = nom_data.get("advisor", "")
 		var claimed_card: Dictionary = nom_data.get("claim", {})
+		# Use unique key per nomination (advisor + index) to support multiple per advisor
+		var overlay_key: String = "%s_%d" % [advisor, idx]
 		_overlay_mgr.show_nomination_for_cube(
 			self,
-			role_key,
+			overlay_key,
 			cube,
-			Callable(self, "_nomination_color"),
+			Callable(self, "_nomination_color_by_key").bind(advisor),
 			Callable(self, "cube_outlines"),
 			claimed_card
 		)
+		idx += 1
 
-	DebugLogger.log("HexField: Showing nominations")
+	DebugLogger.log("HexField: Showing %d nominations" % nominations.size())
+
+
+## Color helper for array-based nominations (takes advisor from bound arg)
+func _nomination_color_by_key(key: String, _claim := {}, advisor: String = "") -> Color:
+	# Extract advisor from key (format: "advisor_index")
+	var actual_advisor := advisor
+	if actual_advisor.is_empty():
+		actual_advisor = key.split("_")[0] if "_" in key else key
+	return NOMINATION_COLORS.get(actual_advisor, Color.WHITE)
 
 
 func _clear_nominations() -> void:
@@ -547,14 +560,11 @@ func show_built_tile(cube: Vector3i, card: Dictionary, winning_role: String = ""
 	if cube == INVALID_HEX:
 		return
 
-	# Persist winning nomination (stays forever), clear losing nomination
+	# Only persist the winning nomination ON THIS HEX, clear all others
 	if not winning_role.is_empty():
-		_overlay_mgr.persist_nomination(winning_role)
-		var losing_role := "urbanist" if winning_role == "industry" else "industry"
-		_overlay_mgr.clear_nomination(losing_role)
-	else:
-		# Fallback: clear all nominations
-		_clear_nominations()
+		_overlay_mgr.persist_nomination_at_hex(winning_role, cube)
+	# Clear ALL remaining nominations (including winner's other nomination)
+	_clear_nominations()
 
 	var outlines := cube_outlines([cube])
 	if outlines.is_empty():

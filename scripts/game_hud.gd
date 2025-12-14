@@ -314,7 +314,7 @@ func _connect_signals() -> void:
 
 func _refresh_all() -> void:
 	_on_phase_changed(_gm.phase)
-	_on_hand_updated(_gm.hand, _gm.revealed_index)
+	_on_hand_updated(_gm.hand, _gm.revealed_indices)
 	_on_nominations_updated(_gm.nominations)
 	_on_scores_updated(_gm.scores)
 	_on_visibility_updated(_gm.advisor_visibility)
@@ -346,49 +346,59 @@ func _on_phase_changed(phase: int) -> void:
 	_update_ui()
 
 
-func _on_hand_updated(hand: Array, revealed_index: int) -> void:
-	_rebuild_card_buttons(hand, revealed_index)
+func _on_hand_updated(hand: Array, revealed_indices: Array) -> void:
+	_rebuild_card_buttons(hand, revealed_indices)
 	_update_ui()
 
 
-func _on_nominations_updated(nominations: Dictionary) -> void:
-	_debug_log("GameHud: Nominations updated - %s" % nominations)
+func _on_nominations_updated(nominations_data) -> void:
+	_debug_log("GameHud: Nominations updated - %s" % str(nominations_data))
 
-	# New format: {role: {hex: Vector3i, claim: Dictionary}}
+	# New format: Array of {hex: Vector3i, claim: Dictionary, advisor: String}
 	var entries: Array[String] = []
-	for key in nominations.keys():
-		var nom_data: Dictionary = nominations[key]
-		if nom_data.is_empty():
-			continue
-		var cube: Vector3i = nom_data.get("hex", INVALID_HEX)
-		var claim: Dictionary = nom_data.get("claim", {})
+	var nominations_array: Array = nominations_data if nominations_data is Array else []
+
+	for nom in nominations_array:
+		var cube: Vector3i = nom.get("hex", INVALID_HEX)
+		var claim: Dictionary = nom.get("claim", {})
+		var advisor: String = nom.get("advisor", "?")
 		if cube != INVALID_HEX:
 			var claim_str := MapLayers.label(claim) if not claim.is_empty() else "?"
-			entries.append("%s: %s" % [key.capitalize(), claim_str])
+			entries.append("%s: %s" % [advisor.capitalize(), claim_str])
 
 	if not entries.is_empty():
 		_status_label.text = "Nominated: " + ", ".join(entries)
 
 	# Always call show_nominations - it clears first, then shows valid ones
-	# This ensures nomination overlays are cleared when all nominations are INVALID_HEX
 	if _hex_field and _hex_field.has_method("show_nominations"):
-		_hex_field.show_nominations(nominations)
+		_hex_field.show_nominations(nominations_array)
 
 	_update_ui()
 
 
 func _on_commits_updated(commits: Dictionary) -> void:
-	var industry_done: bool = commits.get("industry", false)
-	var urbanist_done: bool = commits.get("urbanist", false)
+	# New format: {industry: count, urbanist: count, industry_done: bool, urbanist_done: bool, sub_phase: String}
+	var ind_count: int = commits.get("industry", 0) if commits.get("industry") is int else (1 if commits.get("industry", false) else 0)
+	var urb_count: int = commits.get("urbanist", 0) if commits.get("urbanist") is int else (1 if commits.get("urbanist", false) else 0)
+	var industry_done: bool = commits.get("industry_done", ind_count >= 2)
+	var urbanist_done: bool = commits.get("urbanist_done", urb_count >= 2)
+	var sub_phase: String = commits.get("sub_phase", "")
 
 	if industry_done and urbanist_done:
-		_status_label.text = "Both advisors committed!"
-	elif industry_done:
-		_status_label.text = "Industry committed. Waiting for Urbanist..."
-	elif urbanist_done:
-		_status_label.text = "Urbanist committed. Waiting for Industry..."
+		_status_label.text = "All nominations committed!"
 	else:
-		_status_label.text = "Waiting for advisors to commit..."
+		# Show progress for each advisor
+		var status_parts: Array[String] = []
+		status_parts.append("Industry: %d/2" % ind_count)
+		status_parts.append("Urbanist: %d/2" % urb_count)
+
+		# Show who's turn it is
+		if sub_phase.begins_with("industry"):
+			status_parts.append("(Industry's turn)")
+		elif sub_phase.begins_with("urbanist"):
+			status_parts.append("(Urbanist's turn)")
+
+		_status_label.text = " | ".join(status_parts)
 
 
 func _on_scores_updated(scores: Dictionary) -> void:
@@ -504,7 +514,7 @@ func _on_hex_clicked(cube: Vector3i) -> void:
 # CARD UI
 # ─────────────────────────────────────────────────────────────────────────────
 
-func _rebuild_card_buttons(hand: Array, revealed_index: int) -> void:
+func _rebuild_card_buttons(hand: Array, revealed_indices: Array) -> void:
 	# Clear existing buttons
 	for child in _hand_container.get_children():
 		child.queue_free()
@@ -518,7 +528,7 @@ func _rebuild_card_buttons(hand: Array, revealed_index: int) -> void:
 
 	for i in range(hand.size()):
 		var card: Dictionary = hand[i]
-		var btn := _create_card_button(card, i, revealed_index)
+		var btn := _create_card_button(card, i, revealed_indices)
 		_hand_container.add_child(btn)
 		_card_buttons.append(btn)
 
@@ -546,12 +556,12 @@ func _get_hand_instruction() -> String:
 			return "YOUR HAND"
 
 
-func _create_card_button(card: Dictionary, index: int, revealed_index: int) -> Button:
+func _create_card_button(card: Dictionary, index: int, revealed_indices: Array) -> Button:
 	return _action_panel.create_card_button(
 		card,
 		index,
 		_selected_card_index,
-		revealed_index,
+		revealed_indices,
 		SUIT_COLORS,
 		_button_hover_shader,
 		_on_card_button_pressed,
@@ -623,9 +633,10 @@ func _on_card_button_pressed(index: int) -> void:
 		_debug_log("GameHud: Selected card %d" % index)
 
 	if _gm:
-		_rebuild_card_buttons(_gm.hand, _gm.revealed_index)
-		if _gm.phase == 1 and _gm.revealed_index < 0:
-			_status_label.text = "Card %d selected - click REVEAL" % index
+		_rebuild_card_buttons(_gm.hand, _gm.revealed_indices)
+		if _gm.phase == 1 and _gm.revealed_indices.size() < 2:
+			var remaining: int = 2 - _gm.revealed_indices.size()
+			_status_label.text = "Card %d selected - click REVEAL (%d more to reveal)" % [index, remaining]
 		elif _gm.phase == 3:
 			_status_label.text = "Card %d selected - pick hex + BUILD" % index
 	_update_ui()
@@ -683,7 +694,7 @@ func _update_ui() -> void:
 	var role: int = _gm.local_role
 	var phase: int = _gm.phase
 
-	var state := _action_panel.compute_state(role, phase, _selected_card_index, _selected_hex, _gm.revealed_index)
+	var state := _action_panel.compute_state(role, phase, _selected_card_index, _selected_hex, _gm.revealed_indices)
 	_action_panel.apply_state({
 		"reveal": _reveal_button,
 		"commit": _commit_button,
@@ -856,7 +867,7 @@ func _select_card(index: int) -> void:
 		return
 	_debug_log("GameHud: Keyboard selected card %d" % index)
 	_selected_card_index = index
-	_rebuild_card_buttons(_gm.hand, _gm.revealed_index)
+	_rebuild_card_buttons(_gm.hand, _gm.revealed_indices)
 	_update_ui()
 
 

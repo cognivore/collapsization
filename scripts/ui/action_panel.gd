@@ -6,16 +6,18 @@ const INVALID_HEX := Vector3i(0x7FFFFFFF, 0, 0)
 
 ## Compute which buttons should be visible/enabled for the given context.
 ## Returns a dictionary with reveal/commit/build visibility and disabled flags.
-func compute_state(role: int, phase: int, selected_card: int, selected_hex: Vector3i, revealed_index: int) -> Dictionary:
+func compute_state(role: int, phase: int, selected_card: int, selected_hex: Vector3i, revealed_indices: Array) -> Dictionary:
 	var show_reveal := role == 0 and phase == 1
 	var show_build := role == 0 and phase == 3
 	var show_commit := role != 0 and phase == 2 and selected_hex != INVALID_HEX
+	# Mayor must reveal 2 cards before nominations start
+	var can_reveal := selected_card >= 0 and revealed_indices.size() < 2 and selected_card not in revealed_indices
 
 	return {
 		"show_reveal": show_reveal,
 		"show_build": show_build,
 		"show_commit": show_commit,
-		"reveal_disabled": not (selected_card >= 0 and revealed_index < 0),
+		"reveal_disabled": not can_reveal,
 		"build_disabled": not (selected_card >= 0 and selected_hex != INVALID_HEX),
 		"commit_disabled": not show_commit,
 		"show_action_card": role == 0 and phase in [1, 3],
@@ -59,7 +61,7 @@ func create_card_button(
 	card: Dictionary,
 	index: int,
 	selected_index: int,
-	revealed_index: int,
+	revealed_indices: Array,
 	suit_colors: Dictionary,
 	hover_shader: Shader,
 	pressed_cb: Callable,
@@ -137,7 +139,7 @@ func create_card_button(
 		btn.add_theme_stylebox_override("normal", selected)
 		btn.add_theme_stylebox_override("hover", selected)
 
-	if index == revealed_index:
+	if index in revealed_indices:
 		var revealed := base.duplicate()
 		revealed.bg_color = Color(1.0, 0.95, 0.7)
 		btn.add_theme_stylebox_override("normal", revealed)
@@ -176,4 +178,3 @@ func _add_hover_glow(btn: Button, hover_shader: Shader) -> void:
 		tween.tween_property(glow, "color:a", 0.0, 0.15)
 		tween.tween_callback(func(): mat.set_shader_parameter("enabled", false))
 	)
-

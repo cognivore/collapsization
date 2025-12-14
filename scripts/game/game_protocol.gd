@@ -33,49 +33,35 @@ static func deserialize_hex_dict(data: Dictionary) -> Dictionary:
 	return result
 
 
-## Serialize nominations: {role: {hex: Vector3i, claim: Dictionary}} -> network format
-static func serialize_nominations(nominations: Dictionary) -> Dictionary:
-	var result := {}
-	for role_key in nominations.keys():
-		var nom: Dictionary = nominations[role_key]
-		if nom.is_empty():
-			result[role_key] = {}
-		else:
-			var hex: Vector3i = nom.get("hex", INVALID_HEX)
-			result[role_key] = {
-				"hex": [hex.x, hex.y, hex.z],
-				"claim": nom.get("claim", {})
-			}
+## Serialize nominations: Array of {hex: Vector3i, claim: Dict, advisor: String} -> network format
+static func serialize_nominations(nominations: Array) -> Array:
+	var result: Array = []
+	for nom in nominations:
+		var hex: Vector3i = nom.get("hex", INVALID_HEX)
+		result.append({
+			"hex": [hex.x, hex.y, hex.z],
+			"claim": nom.get("claim", {}),
+			"advisor": nom.get("advisor", "")
+		})
 	return result
 
 
-## Deserialize nominations: network format -> {role: {hex: Vector3i, claim: Dictionary}}
-static func deserialize_nominations(data: Dictionary) -> Dictionary:
-	var result := {}
-	for role_key in data.keys():
-		var nom_data: Dictionary = data[role_key]
-		if nom_data.is_empty():
-			result[role_key] = {}
-		else:
-			var arr: Array = nom_data.get("hex", [])
-			var hex := INVALID_HEX
-			if arr.size() == 3:
-				hex = Vector3i(arr[0], arr[1], arr[2])
-			result[role_key] = {
-				"hex": hex,
-				"claim": nom_data.get("claim", {})
-			}
+## Deserialize nominations: network format -> Array of {hex: Vector3i, claim: Dict, advisor: String}
+static func deserialize_nominations(data: Array) -> Array:
+	var result: Array = []
+	for nom_data in data:
+		if not (nom_data is Dictionary):
+			continue
+		var arr: Array = nom_data.get("hex", [])
+		var hex := INVALID_HEX
+		if arr.size() == 3:
+			hex = Vector3i(arr[0], arr[1], arr[2])
+		result.append({
+			"hex": hex,
+			"claim": nom_data.get("claim", {}),
+			"advisor": nom_data.get("advisor", "")
+		})
 	return result
-
-
-## Create an empty nomination entry
-static func empty_nomination() -> Dictionary:
-	return {"hex": INVALID_HEX, "claim": {}}
-
-
-## Check if a nomination is valid (has a real hex)
-static func is_valid_nomination_entry(nom: Dictionary) -> bool:
-	return nom.get("hex", INVALID_HEX) != INVALID_HEX
 
 
 static func serialize_placement(p: Dictionary) -> Dictionary:
@@ -118,11 +104,16 @@ static func serialize_town_center(hex: Vector3i) -> Array:
 	return _serialize_hex(hex)
 
 
-static func serialize_hand_for_role(role: int, hand: Array, revealed_index: int) -> Dictionary:
+static func serialize_hand_for_role(role: int, hand: Array, revealed_indices: Array) -> Dictionary:
 	if role == 0:
-		return {"cards": hand, "revealed_index": revealed_index}
-	if revealed_index >= 0 and revealed_index < hand.size():
-		return {"visible": [hand[revealed_index]], "revealed_index": revealed_index}
+		return {"cards": hand, "revealed_indices": revealed_indices}
+	# Advisors see only the revealed cards
+	var visible: Array = []
+	for idx in revealed_indices:
+		if idx >= 0 and idx < hand.size():
+			visible.append(hand[idx])
+	if not visible.is_empty():
+		return {"visible": visible, "revealed_indices": revealed_indices}
 	return {}
 
 
@@ -136,6 +127,50 @@ static func deserialize_built_hexes(data: Array) -> Array[Vector3i]:
 	for arr in data:
 		if arr is Array and arr.size() == 3:
 			result.append(Vector3i(arr[0], arr[1], arr[2]))
+	return result
+
+
+## Serialize turn history for network sync
+## Each entry: {turn, revealed_indices, nominations, build, reality, scores_delta}
+static func serialize_turn_history(history: Array) -> Array:
+	var result: Array = []
+	for entry in history:
+		var hex: Vector3i = entry.get("build", {}).get("hex", INVALID_HEX)
+		result.append({
+			"turn": entry.get("turn", 0),
+			"revealed_indices": entry.get("revealed_indices", []),
+			"nominations": serialize_nominations(entry.get("nominations", [])),
+			"build": {
+				"hex": _serialize_hex(hex),
+				"card": entry.get("build", {}).get("card", {}),
+			},
+			"reality": entry.get("reality", {}),
+			"scores_delta": entry.get("scores_delta", {}),
+		})
+	return result
+
+
+## Deserialize turn history from network format
+static func deserialize_turn_history(data: Array) -> Array:
+	var result: Array = []
+	for entry in data:
+		if not (entry is Dictionary):
+			continue
+		var hex_arr: Array = entry.get("build", {}).get("hex", [])
+		var hex := INVALID_HEX
+		if hex_arr.size() == 3:
+			hex = Vector3i(hex_arr[0], hex_arr[1], hex_arr[2])
+		result.append({
+			"turn": entry.get("turn", 0),
+			"revealed_indices": entry.get("revealed_indices", []),
+			"nominations": deserialize_nominations(entry.get("nominations", [])),
+			"build": {
+				"hex": hex,
+				"card": entry.get("build", {}).get("card", {}),
+			},
+			"reality": entry.get("reality", {}),
+			"scores_delta": entry.get("scores_delta", {}),
+		})
 	return result
 
 

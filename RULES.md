@@ -18,17 +18,18 @@
 
 Each turn has three phases:
 
-1. **Draw Phase**: Mayor draws three cards from the Mayor pile into hand. Nominations from the previous turn are cleared. The Draw phase ends when the Mayor reveals exactly one of their three cards face-up.
+1. **Draw Phase**: Mayor draws **four cards** from the Mayor pile into hand. Nominations from the previous turn are cleared. The Draw phase ends when the Mayor reveals exactly **two of their four cards** face-up (revealing them one at a time).
 
-2. **Nomination Phase** (Commit → Reveal): Advisors secretly commit one hex each on the playable frontier (any hex adjacent to a built hex and not already built) and attach a claimed card from their tray (truthful or a bluff). When both Advisors have committed, nominations reveal simultaneously.
+2. **Nomination Phase** (Commit → Reveal): Each Advisor secretly commits **two hexes** on the playable frontier (any hex adjacent to a built hex and not already built), each with an attached claimed card from their tray (truthful or a bluff). An Advisor cannot nominate the same hex twice. When all four nominations are committed, they reveal simultaneously.
 
-3. **Build Phase** (Choose → Score): Mayor chooses one card from hand (not limited to the revealed one) and one of the nominated hexes to build there, then scoring occurs.
+3. **Build Phase** (Choose → Score): Mayor chooses one card from hand and one of the nominated hexes to build there, then scoring occurs.
 
 ## Nominations and Valid Hexes
 
 - A valid nomination is any unbuilt hex on the playable frontier (adjacent to at least one built hex).
-- Both Advisors may nominate the same hex. The nominated hexes are the only places the Mayor can build this turn.
-- Advisors' claims are informational hints (or bluffs); scoring compares the Mayor's placed card to the hidden Reality Tile.
+- Each Advisor nominates **two distinct hexes** per turn (4 nominations total, though hexes may overlap between Advisors).
+- The nominated hexes (2–4 unique hexes) are the only places the Mayor can build this turn.
+- Advisors' claims are informational hints (or bluffs); scoring depends on bluff detection.
 
 ## Fog, Visibility, and Reality Tiles
 
@@ -38,24 +39,59 @@ Each turn has three phases:
 
 ## Law of Similarity and Scoring
 
+### Mayor Scoring
+
 **Distance-to-reality** determines the Mayor's score:
 
 - If the placed card's suit matches the Reality Tile's suit: distance = |placed value − reality value|
-- If suits do not match: distance = 0 (Mayor cannot score)
+- If suits do not match: distance is undefined (Mayor cannot score from that hex)
 
 **Mayor** scores 1 point if:
-- The built hex has the minimum distance-to-reality among this turn's nominated hexes (ties still reward the Mayor), AND
-- The placed card is not a Spade.
+- The placed card + chosen hex achieves the minimum possible distance-to-reality across ALL combinations of the Mayor's 4 hand cards and all nominated hexes (ties still reward the Mayor), AND
+- The Reality Tile is not a Spade (game ends on Spade reality).
 
-**Advisors** score 1 point if the Mayor builds on their nominated hex:
-- If only one Advisor nominated the chosen hex, that Advisor scores.
-- If both Advisors nominated the same hex, the Advisor whose claim value is closest to the Mayor's placed card value wins the point.
-- If both claims are equally close to the placed value, the Advisor whose claim suit matches the placed card's suit wins.
+In other words, the Mayor only earns a point if they found the optimal build among their entire hand—not just the best hex for the card they happened to play.
 
-**Spade placement**: When the Mayor places a Spade card, the Mayor does not score, but the Advisor whose claim value is closest to the Mayor's placed Spade value still scores 1 point.
+### Advisor Scoring with Bluff Detection
+
+When the Mayor builds on a nominated hex, scoring depends on whether the Mayor "trusted" or "called" each Advisor's claim:
+
+**Non-Spade Reality** (normal case):
+- **Mayor TRUSTS** (placed card suit = claim suit): Advisor gets **+1 point**, regardless of whether they were honest.
+- **Mayor CALLS** (placed card suit ≠ claim suit):
+  - If claim suit = reality suit (Advisor was honest): Advisor gets **+1 point** (Mayor was wrong to distrust).
+  - If claim suit ≠ reality suit (bluff caught): Advisor gets **0 points**.
+
+**Spade Reality** (game ends):
+- If the Advisor claimed the hex was a Spade (honest warning): **0 points** (no reward for finding mines).
+- If the Advisor claimed anything but Spade (lied about mine): **-2 points** (severe penalty).
+
+### Tie-Breaking for Same-Hex Nominations
+
+If both Advisors nominated the same hex, a tie-break determines which Advisor receives the scoring outcome:
+
+1. **Claim value proximity**: The Advisor whose claim value is closest to the Mayor's placed card value wins.
+2. **Suit match**: If values are equally close, the Advisor whose claim suit matches the placed card's suit wins.
+3. **Domain affinity**: If still tied (same value AND same suit), the Advisor whose domain matches the suit wins:
+   - **Hearts** → Urbanist wins (community/people theme)
+   - **Diamonds** → Industry wins (resources theme)
+   - **Spades** → Nobody wins (both lied about a mine when reality wasn't a Spade)
 
 ## Spades as Mines and Game End
 
 - Spades represent mines in reality.
 - If the Mayor builds on a hex whose Reality Tile is a Spade, the game ends immediately after placement and all reality is revealed.
+- Spade penalty is built into the bluff detection scoring: Advisors who honestly warned about Spades score +1, while those who lied about mines lose 2 points.
 - Final scores are tallied; the player with the most points wins.
+
+## Strategic Implications
+
+The bluff detection mechanic creates interesting strategic tension:
+
+1. **For Advisors**: Lying is risky—if the Mayor doesn't play the suit you claimed, you get 0 points. Telling the truth earns +1 if the Mayor builds on your hex (for non-Spade hexes).
+
+2. **For Mayor**: You can test Advisor honesty by playing a different suit than claimed. If the Advisor was bluffing, they score nothing. However, if they were honest, they still score.
+
+3. **Deduction**: With 2 revealed cards and full turn history, the Mayor can track which Advisors tend to bluff and make informed trust decisions.
+
+4. **Spade strategy**: Honestly warning about Spades yields 0 points (no free reward for finding mines), while lying about mines risks -2 penalty. This means Advisors must weigh: nominate safe hexes for points, or risk a spade bluff to end the game early.

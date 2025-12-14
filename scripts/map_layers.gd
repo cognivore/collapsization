@@ -47,10 +47,18 @@ static func label(card: Dictionary) -> String:
 	if card.is_empty():
 		return ""
 	var suit_str := ""
-	match card["suit"]:
+	# Convert suit to int in case it comes as float from JSON
+	var suit_val: int = int(card.get("suit", -1))
+	# #region agent log
+	_debug_log("H", "label_called", {"card": card, "suit_raw": card.get("suit", "MISSING"), "suit_int": suit_val})
+	# #endregion
+	match suit_val:
 		Suit.HEARTS: suit_str = "♥"
 		Suit.DIAMONDS: suit_str = "♦"
 		Suit.SPADES: suit_str = "♠"
+	# #region agent log
+	_debug_log("H", "label_result", {"rank": card.get("rank", "?"), "suit_str": suit_str, "result": "%s%s" % [card.get("rank", "?"), suit_str]})
+	# #endregion
 	return "%s%s" % [card["rank"], suit_str]
 
 
@@ -154,3 +162,21 @@ func generate(field: Node, map_radius: int, seed: int = -1) -> void:
 			reveal_tile(cube)
 
 	DebugLogger.log("MapLayers: Legacy generate() - %d tiles" % truth.size())
+
+
+# #region agent log
+static func _debug_log(hypothesis_id: String, message: String, data: Dictionary) -> void:
+	var log_entry := {
+		"timestamp": Time.get_unix_time_from_system() * 1000,
+		"location": "map_layers.gd",
+		"hypothesisId": hypothesis_id,
+		"message": message,
+		"data": data,
+		"sessionId": "debug-session"
+	}
+	var file := FileAccess.open("/Users/sweater/Github/collapsization/.cursor/debug.log", FileAccess.READ_WRITE)
+	if file:
+		file.seek_end()
+		file.store_line(JSON.stringify(log_entry))
+		file.close()
+# #endregion
