@@ -108,12 +108,14 @@ If both Advisors nominated the same hex, a tie-break determines which Advisor re
 
 The game ends when one of these conditions is met:
 
-### 1. Mine Strike (Mayor Loses Immediately)
+### 1. Mine Strike (Mayor's Score Becomes 0)
 
 - **Spades** represent mines in reality.
-- If the Mayor builds on a hex whose Reality Tile is a Spade, the game ends immediately and **Mayor LOSES regardless of score**.
+- If the Mayor builds on a hex whose Reality Tile is a Spade, the game ends immediately and **Mayor's score becomes 0**.
 - Spade penalty is still applied to Advisors: those who honestly warned about Spades score +1, while those who lied about mines lose 2 points.
-- The Advisor with the highest score wins (Industry or Urbanist).
+- The Mayor **cannot win** after hitting a mine, but **can tie** if the highest advisor score is also 0.
+- If any advisor has a positive score, that advisor (or the advisor with the highest positive score) wins.
+- **Exception**: If both advisors have negative scores, the Mayor wins outright—a reward for masterful manipulation.
 
 ### 2. City Completion (Mayor's Endgame)
 
@@ -127,7 +129,7 @@ The game ends when one of these conditions is met:
 
 | Condition | Who Can Win | How |
 |-----------|-------------|-----|
-| Mine Strike | Industry or Urbanist only | Mayor loses immediately; highest advisor score wins |
+| Mine Strike | Anyone (Mayor wins if both advisors negative) | Mayor's score becomes 0; can tie at 0, wins if both advisors negative |
 | City Complete | Anyone | Highest score wins |
 
 ## Strategic Implications

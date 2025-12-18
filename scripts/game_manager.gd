@@ -113,7 +113,7 @@ var local_fog: Array = []
 # Town center starts as A♥, so hearts starts at 1
 var facilities := {"hearts": 1, "diamonds": 0}
 var city_complete := false # True when Mayor reaches 10♥ + 10♦
-var mayor_hit_mine := false # True when Mayor builds on Spade (Mayor loses immediately)
+var mayor_hit_mine := false # True when Mayor builds on Spade (Mayor's score becomes 0, can tie but not win)
 
 # Deck management
 var _deck: Array[Dictionary] = []
@@ -535,11 +535,27 @@ func _finish_game(reason: String) -> void:
 	# Determine winner
 	var winner: String = ""
 	if mayor_hit_mine:
-		# Mayor loses immediately regardless of score
-		DebugLogger.log("GameManager: Mayor HIT A MINE - MAYOR LOSES!")
+		# Mayor's score becomes 0 - Mayor can tie but not win outright
+		DebugLogger.log("GameManager: Mayor HIT A MINE - Mayor's score becomes 0!")
+		scores["mayor"] = 0
 		var ind_score: int = scores["industry"]
 		var urb_score: int = scores["urbanist"]
-		winner = "industry" if ind_score >= urb_score else "urbanist"
+		var max_advisor_score: int = max(ind_score, urb_score)
+
+		if max_advisor_score > 0:
+			# An advisor has positive score - highest advisor wins
+			winner = "industry" if ind_score >= urb_score else "urbanist"
+		elif max_advisor_score == 0:
+			# Mayor ties with advisor(s) at 0 - Mayor can't win but can tie
+			var tied: Array[String] = ["mayor"]
+			if ind_score == 0:
+				tied.append("industry")
+			if urb_score == 0:
+				tied.append("urbanist")
+			winner = "/".join(tied) if tied.size() > 1 else tied[0]
+		else:
+			# Both advisors negative, Mayor at 0 - bless the Mayor, they earned it
+			winner = "mayor"
 	else:
 		# Normal score comparison
 		var max_score: int = max(scores["mayor"], max(scores["industry"], scores["urbanist"]))
