@@ -10,7 +10,7 @@
 
 ## Setup and Fog
 
-- Center tile starts built as Ace of Hearts.
+- Center tile is Ace of Hearts and starts built as Ace of Hearts.
 - Fog of war begins cleared on the center and its surrounding ring (7 hexes total).
 - Whenever fog is revealed, each newly revealed hex is immediately assigned a Reality Tile from the reality deck. Advisors see all revealed Reality Tiles; the Mayor sees only the fog boundary.
 
@@ -18,9 +18,9 @@
 
 Each turn has four phases:
 
-1. **Draw Phase**: Mayor draws **four cards** from the Mayor pile into hand. Nominations from the previous turn are cleared. The Draw phase ends when the Mayor reveals exactly **two of their four cards** face-up (revealing them one at a time).
+1. **Draw Phase**: Mayor draws **four cards** from the Mayor pile into hand. Nominations from the previous turn are cleared. The Draw phase ends when the Mayor reveals exactly **two of their four cards** face-up (revealing them at the same time).
 
-2. **Control Phase** (NEW): Mayor chooses how to constrain the Advisors' nominations. The Mayor must pick ONE of two options:
+2. **Control Phase**: Mayor chooses how to constrain the Advisors' nominations. The Mayor must pick ONE of two options:
    - **Option A — Force Suits**: Assign suit constraints to each Advisor. Choose one configuration:
      - Urbanist must claim Diamonds, Industry must claim Hearts; OR
      - Urbanist must claim Hearts, Industry must claim Diamonds
@@ -77,7 +77,7 @@ Each Advisor's second nomination is their free choice. This gives the Mayor geog
 - The placed card's **suit matches** the Reality Tile's suit (Hearts→Hearts, Diamonds→Diamonds), AND
 - The Reality Tile is not a Spade (game ends on Spade reality).
 
-This simple rule rewards the Mayor for correctly reading advisor claims and choosing hexes where their card suit aligns with reality. No complex optimal-distance calculation needed—just match the suit!
+This simple rule rewards the Mayor for correctly reading advisor claims, seeing through bluffs by choosing hexes where their card suit aligns with reality.
 
 ### Advisor Scoring with Bluff Detection
 
@@ -97,25 +97,20 @@ When the Mayor builds on a nominated hex, scoring depends on whether the Mayor "
 
 If both Advisors nominated the same hex, a tie-break determines which Advisor receives the scoring outcome:
 
-1. **Claim value proximity**: The Advisor whose claim value is closest to the Mayor's placed card value wins.
-2. **Suit match**: If values are equally close, the Advisor whose claim suit matches the placed card's suit wins.
-3. **Domain affinity**: If still tied (same value AND same suit), the Advisor whose domain matches the suit wins:
-   - **Hearts** → Urbanist wins (community/people theme)
-   - **Diamonds** → Industry wins (resources theme)
-   - **Spades** → Nobody wins (both lied about a mine when reality wasn't a Spade)
+// TODO
 
 ## Game End Conditions
 
 The game ends when one of these conditions is met:
 
-### 1. Mine Strike (Mayor's Score Becomes 0)
+### 1. Mine Strike
 
 - **Spades** represent mines in reality.
 - If the Mayor builds on a hex whose Reality Tile is a Spade, the game ends immediately and **Mayor's score becomes 0**.
 - Spade penalty is still applied to Advisors: those who honestly warned about Spades score +1, while those who lied about mines lose 2 points.
-- The Mayor **cannot win** after hitting a mine, but **can tie** if the highest advisor score is also 0.
-- If any advisor has a positive score, that advisor (or the advisor with the highest positive score) wins.
-- **Exception**: If both advisors have negative scores, the Mayor wins outright—a reward for masterful manipulation.
+- The Mayor **can tie** if the highest advisor score is also 0.
+- The Mayor **can win** if both Advisors lied about the hex and got their scores to negative numbers.
+- Otherwise, all the Advisors who have the highest score are declared winners, if there is more than one, it's a tie.
 
 ### 2. City Completion (Mayor's Endgame)
 
@@ -123,28 +118,5 @@ The game ends when one of these conditions is met:
 - Facilities are counted by the **reality tile suit**, not the placed card suit.
 - The town center (A♥) counts as the first Hearts facility.
 - When Mayor completes 10♥ + 10♦, the game ends and **scores are compared normally**.
-- The player with the highest score wins.
+- The player with the highest score wins; ties are possible.
 
-### Winner Determination
-
-| Condition | Who Can Win | How |
-|-----------|-------------|-----|
-| Mine Strike | Anyone (Mayor wins if both advisors negative) | Mayor's score becomes 0; can tie at 0, wins if both advisors negative |
-| City Complete | Anyone | Highest score wins |
-
-## Strategic Implications
-
-The Control Phase creates a cat-and-mouse dynamic between Mayor and Advisors:
-
-1. **For Mayor (Control Phase)**:
-   - Use **Force Suits** when you want to test Advisor honesty in a specific suit domain, or when your revealed cards favor a particular suit.
-   - Use **Force Hexes** when you want information about specific map locations, or to prevent Advisors from only nominating "safe" hexes far from danger.
-
-2. **For Advisors**:
-   - When suits are forced, you must claim that suit once—but you can still bluff about the hex's reality.
-   - When hexes are forced, you lose control of one nomination but gain freedom in your claim suit.
-   - The -2 Spade penalty remains dangerous: if Mayor forces you to claim Hearts on a Spade reality, you'll lose points.
-
-3. **Deduction**: With 2 revealed cards, control constraints, and full turn history, the Mayor can track Advisor behavior patterns and make informed decisions.
-
-4. **Balance**: The Control Phase gives Mayor active tools to shape the game, reducing the information asymmetry that previously favored Advisors.
