@@ -42,9 +42,10 @@ import asyncio
 import json
 import logging
 import os
+import random
 import sys
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List, Tuple
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -75,7 +76,7 @@ except ImportError:
 
 try:
     import torch
-    from agents.learned_agent import LearnedAgent, PolicyNetwork
+    from agents.learned_agent import LearnedAgent, PolicyNetwork, AlphaZeroNetwork
 
     TORCH_AVAILABLE = True
 except ImportError:
@@ -91,7 +92,7 @@ logger = logging.getLogger("serve")
 
 
 # #region agent log
-DEBUG_LOG_PATH = "/Users/sweater/Github/collapsization/.cursor/debug.log"
+DEBUG_LOG_PATH = "/Users/sweater/Github/collapsization-red/.cursor/debug.log"
 
 
 def _debug_log(hypothesis: str, message: str, data: dict = None):
@@ -114,19 +115,34 @@ def _debug_log(hypothesis: str, message: str, data: dict = None):
 
 
 class InferenceServer:
-    """WebSocket server for RL bot inference."""
+    """WebSocket server for RL bot inference.
+
+    Supports diverse agent selection from a checkpoint pool:
+    - If pool_dir is provided, loads all checkpoints from the pool
+    - Each game session randomly samples agents from the pool
+    - This creates diverse gameplay and tests robustness
+    """
 
     def __init__(
         self,
         checkpoint_paths: Optional[Dict[str, str]] = None,
         use_scripted_fallback: bool = True,
         device: str = "cpu",
+        pool_dir: Optional[str] = None,  # NEW: Directory containing checkpoint pool
+        sample_from_pool: bool = True,  # NEW: Randomly sample from pool per game
     ):
         self.device = device
         self.use_scripted_fallback = use_scripted_fallback
+        self.pool_dir = pool_dir
+        self.sample_from_pool = sample_from_pool
 
-        # Learned agents (one per role)
+        # Learned agents (one per role) - default agents
         self.learned_agents: Dict[Role, Any] = {}
+
+        # Agent pool for diverse sampling: {role: [(checkpoint_id, agent), ...]}
+        self.agent_pool: Dict[Role, List[Tuple[str, Any]]] = {
+            role: [] for role in Role
+        }
 
         # Scripted fallback agents
         self.scripted_agents: Dict[Role, Any] = {
@@ -138,6 +154,10 @@ class InferenceServer:
         # Load checkpoints if provided
         if checkpoint_paths:
             self._load_checkpoints(checkpoint_paths)
+
+        # Load checkpoint pool if provided
+        if pool_dir and os.path.isdir(pool_dir):
+            self._load_checkpoint_pool(pool_dir)
 
         # Global statistics
         self.stats = {
@@ -184,6 +204,19 @@ class InferenceServer:
             f"Industry={obs_sizes[Role.INDUSTRY]}, Urbanist={obs_sizes[Role.URBANIST]}"
         )
 
+        # AlphaZero architecture config (must match training)
+        # All roles have equal capacity for balanced self-play learning
+        hidden_dims = {
+            Role.MAYOR: 512,
+            Role.INDUSTRY: 512,
+            Role.URBANIST: 512,
+        }
+        num_blocks_cfg = {
+            Role.MAYOR: 8,
+            Role.INDUSTRY: 8,
+            Role.URBANIST: 8,
+        }
+
         for role_name, path in paths.items():
             if not os.path.exists(path):
                 logger.warning(f"Checkpoint not found: {path}")
@@ -191,17 +224,126 @@ class InferenceServer:
 
             role = Role[role_name.upper()]
             try:
-                agent = LearnedAgent(
-                    int(role),
-                    obs_size=obs_sizes[role],
-                    num_actions=num_actions,
-                    device=self.device,
-                )
-                agent.load_checkpoint(path)
+                # Load checkpoint to detect architecture
+                checkpoint = torch.load(path, map_location=self.device)
+                architecture = checkpoint.get("architecture", "legacy")
+
+                if architecture == "alphazero":
+                    # Create AlphaZero network
+                    policy_net = AlphaZeroNetwork(
+                        obs_sizes[role],
+                        num_actions,
+                        hidden_dim=hidden_dims[role],
+                        num_blocks=num_blocks_cfg[role],
+                    ).to(self.device)
+                    policy_net.load_state_dict(checkpoint["policy_net"])
+                    policy_net.eval()
+
+                    # Create agent with custom policy network
+                    agent = LearnedAgent(
+                        int(role),
+                        policy_net=policy_net,
+                        device=self.device,
+                    )
+                    logger.info(f"Loaded AlphaZero checkpoint for {role.name}: {path}")
+                else:
+                    # Legacy PolicyNetwork
+                    agent = LearnedAgent(
+                        int(role),
+                        obs_size=obs_sizes[role],
+                        num_actions=num_actions,
+                        device=self.device,
+                    )
+                    agent.load_checkpoint(path)
+                    logger.info(f"Loaded legacy checkpoint for {role.name}: {path}")
+
                 self.learned_agents[role] = agent
-                logger.info(f"Loaded checkpoint for {role.name}: {path}")
             except Exception as e:
                 logger.error(f"Failed to load checkpoint {path}: {e}")
+                import traceback
+                traceback.print_exc()
+
+    def _load_checkpoint_pool(self, pool_dir: str):
+        """Load all checkpoints from pool directory for diverse agent sampling."""
+        if not TORCH_AVAILABLE:
+            logger.warning("PyTorch not available, cannot load checkpoint pool")
+            return
+
+        import glob
+        from collapsization import CollapsizationGame
+
+        # Get observation/action sizes
+        game = CollapsizationGame()
+        state = game.new_initial_state()
+        while state.is_chance_node():
+            outcomes = state.chance_outcomes()
+            action = outcomes[0][0]
+            state.apply_action(action)
+
+        obs_sizes = {
+            Role.MAYOR: len(state.observation_tensor(int(Role.MAYOR))),
+            Role.INDUSTRY: len(state.observation_tensor(int(Role.INDUSTRY))),
+            Role.URBANIST: len(state.observation_tensor(int(Role.URBANIST))),
+        }
+        num_actions = game.num_distinct_actions()
+
+        # AlphaZero architecture config
+        hidden_dims = {Role.MAYOR: 512, Role.INDUSTRY: 512, Role.URBANIST: 512}
+        num_blocks_cfg = {Role.MAYOR: 8, Role.INDUSTRY: 8, Role.URBANIST: 8}
+
+        # Load all checkpoints for each role
+        for role in Role:
+            pattern = os.path.join(pool_dir, f"{role.name.lower()}_v*.pt")
+            checkpoints = sorted(glob.glob(pattern))
+
+            for path in checkpoints:
+                try:
+                    checkpoint_id = os.path.basename(path).replace(".pt", "")
+                    checkpoint = torch.load(path, map_location=self.device)
+                    architecture = checkpoint.get("architecture", "legacy")
+
+                    if architecture == "alphazero":
+                        policy_net = AlphaZeroNetwork(
+                            obs_sizes[role],
+                            num_actions,
+                            hidden_dim=hidden_dims[role],
+                            num_blocks=num_blocks_cfg[role],
+                        ).to(self.device)
+                        policy_net.load_state_dict(checkpoint["policy_net"])
+                        policy_net.eval()
+                        agent = LearnedAgent(int(role), policy_net=policy_net, device=self.device)
+                    else:
+                        agent = LearnedAgent(
+                            int(role),
+                            obs_size=obs_sizes[role],
+                            num_actions=num_actions,
+                            device=self.device,
+                        )
+                        agent.policy_net.load_state_dict(checkpoint["policy_net"])
+                        agent.policy_net.eval()
+
+                    self.agent_pool[role].append((checkpoint_id, agent))
+                except Exception as e:
+                    logger.warning(f"Failed to load pool checkpoint {path}: {e}")
+
+            logger.info(f"Loaded {len(self.agent_pool[role])} pool checkpoints for {role.name}")
+
+    def sample_agents_from_pool(self) -> Dict[Role, Tuple[str, Any]]:
+        """Randomly sample one agent per role from the pool.
+
+        Returns:
+            Dict mapping role to (checkpoint_id, agent) tuple
+        """
+        sampled = {}
+        for role in Role:
+            if self.agent_pool[role]:
+                checkpoint_id, agent = random.choice(self.agent_pool[role])
+                sampled[role] = (checkpoint_id, agent)
+            elif role in self.learned_agents:
+                sampled[role] = ("default", self.learned_agents[role])
+            else:
+                sampled[role] = ("scripted", self.scripted_agents[role])
+        return sampled
 
     def reload_checkpoint(self, role: Role, path: str) -> bool:
         """Hot-reload a checkpoint for a specific role."""
@@ -248,11 +390,18 @@ class InferenceServer:
     def _handle_start_game(
         self, game_id: str, request: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Initialize a new game session."""
+        """Initialize a new game session with diverse agent sampling."""
         import time
 
         if game_id in self.game_sessions:
             logger.warning(f"Game {game_id} already exists, resetting")
+
+        # Sample agents from pool if available (for diverse training)
+        sampled_agents = {}
+        if self.sample_from_pool and any(self.agent_pool[role] for role in Role):
+            sampled_agents = self.sample_agents_from_pool()
+            agent_info = {role.name: checkpoint_id for role, (checkpoint_id, _) in sampled_agents.items()}
+            logger.info(f"Game {game_id} using agents: {agent_info}")
 
         self.game_sessions[game_id] = {
             "start_time": time.time(),
@@ -261,6 +410,7 @@ class InferenceServer:
             "errors": 0,
             "seed": request.get("seed"),
             "metadata": request.get("metadata", {}),
+            "sampled_agents": sampled_agents,  # Store sampled agents for this game
         }
         self.stats["active_games"] += 1
         self.stats["total_games"] += 1
@@ -337,8 +487,17 @@ class InferenceServer:
             # Track this action for the game session
             self._track_action(game_id, role)
 
-            # Try learned agent first
-            if role in self.learned_agents:
+            # Check if this game session has sampled agents from pool
+            session = self.game_sessions.get(game_id, {})
+            sampled_agents = session.get("sampled_agents", {})
+
+            # Use sampled agent if available for this game
+            if role in sampled_agents:
+                checkpoint_id, agent = sampled_agents[role]
+                action = await self._get_learned_action_with_agent(agent, role, observation)
+                self.stats["learned_actions"] += 1
+            # Fall back to default learned agent
+            elif role in self.learned_agents:
                 action = await self._get_learned_action(role, observation)
                 self.stats["learned_actions"] += 1
             elif self.use_scripted_fallback:
@@ -470,7 +629,12 @@ class InferenceServer:
 
             # Get action from network
             with torch.no_grad():
-                logits = agent.policy_net(obs)
+                output = agent.policy_net(obs)
+                # Handle AlphaZero-style networks that return (logits, value) tuple
+                if isinstance(output, tuple):
+                    logits = output[0]
+                else:
+                    logits = output
                 probs = torch.softmax(logits, dim=-1)
                 action_idx = torch.argmax(probs, dim=-1).item()
 
@@ -487,7 +651,7 @@ class InferenceServer:
             # #endregion
             # Convert action index back to game action
             return self._decode_action(
-                role, action_idx, phase, frontier_hexes, hand, nominations
+                role, action_idx, phase, frontier_hexes, hand, nominations, observation
             )
 
         except Exception as e:
@@ -512,6 +676,7 @@ class InferenceServer:
         frontier: list,
         hand: list,
         nominations: dict,
+        observation: dict = None,  # Added for constraint validation
     ) -> Dict[str, Any]:
         """Decode action index to game action format."""
         from collapsization.game import (
@@ -519,7 +684,7 @@ class InferenceServer:
             ACTION_COMMIT_BASE,
             ACTION_BUILD_BASE,
         )
-        from collapsization.constants import NUM_CARDS, index_to_card
+        from collapsization.constants import NUM_CARDS, index_to_card, Suit, ControlMode, SuitConfig
 
         if role == Role.MAYOR:
             if phase == Phase.DRAW:
@@ -571,6 +736,31 @@ class InferenceServer:
                 )
                 claim_card = index_to_card(claim_idx)
 
+                # Validate and fix forced suit constraint
+                if observation:
+                    control_mode = observation.get("control_mode", 0)
+                    forced_suit_config = observation.get("forced_suit_config", 0)
+                    already_nominated = observation.get("already_nominated", [])
+                    is_first_nom = len(already_nominated) == 0
+
+                    if control_mode == int(ControlMode.FORCE_SUITS):
+                        # Determine forced suit for this role
+                        role_key = "industry" if role == Role.INDUSTRY else "urbanist"
+                        if forced_suit_config == int(SuitConfig.URB_DIAMOND_IND_HEART):
+                            forced_suit = Suit.DIAMONDS if role_key == "urbanist" else Suit.HEARTS
+                        else:  # URB_HEART_IND_DIAMOND
+                            forced_suit = Suit.HEARTS if role_key == "urbanist" else Suit.DIAMONDS
+
+                        # Check if constraint is satisfied
+                        claim_suit = claim_card.get("suit", -1)
+                        if not is_first_nom:
+                            # Get first claim suit from already_nominated
+                            # TODO: This info isn't passed - for now, force second to use correct suit
+                            if claim_suit != int(forced_suit):
+                                # Force the claim to use the required suit
+                                claim_card = {"suit": int(forced_suit), "value": claim_card.get("value", 7), "rank": claim_card.get("rank", "7")}
+                                logger.info(f"[CONSTRAINT] Forced {role.name} to claim {forced_suit.name} (was {Suit(claim_suit).name if claim_suit >= 0 else 'unknown'})")
+
                 # #region agent log
                 _debug_log(
                     "F",
@@ -598,6 +788,77 @@ class InferenceServer:
                 }
 
         return {"action_type": "unknown"}
+
+    async def _get_learned_action_with_agent(
+        self, agent: Any, role: Role, observation: Dict
+    ) -> Dict[str, Any]:
+        """Get action from a specific learned agent (used for pool sampling)."""
+        import torch
+        import numpy as np
+        from collapsization.observation import ObservationEncoder
+        from collapsization.constants import Phase, NUM_CARDS, index_to_card
+        from collapsization.game import ACTION_REVEAL_BASE, ACTION_COMMIT_BASE, ACTION_BUILD_BASE
+
+        try:
+            # Parse observation
+            phase = Phase(observation.get("phase", 1))
+            turn = observation.get("turn", 0)
+            scores = observation.get("scores", {"mayor": 0, "industry": 0, "urbanist": 0})
+            built_hexes = [tuple(h) for h in observation.get("built_hexes", [])]
+            frontier_hexes = [tuple(h) for h in observation.get("frontier_hexes", [])]
+            revealed_card = observation.get("revealed_card", {})
+            hand = observation.get("hand", [])
+            nominations = observation.get("nominations", {})
+            reality_tiles = observation.get("reality_tiles", {})
+
+            if reality_tiles:
+                reality_tiles = {
+                    tuple(k) if isinstance(k, list) else k: v
+                    for k, v in reality_tiles.items()
+                }
+
+            encoder = ObservationEncoder()
+            for h in frontier_hexes:
+                encoder.get_hex_index(h)
+
+            if role == Role.MAYOR:
+                revealed_index = -1
+                if revealed_card and hand:
+                    for i, card in enumerate(hand):
+                        if card.get("suit") == revealed_card.get("suit") and card.get("value") == revealed_card.get("value"):
+                            revealed_index = i
+                            break
+                obs_tensor = encoder.encode_mayor_observation(
+                    phase, turn, scores, built_hexes, frontier_hexes,
+                    hand, revealed_index, []
+                )
+            else:
+                tray = list(range(NUM_CARDS))
+                obs_tensor = encoder.encode_advisor_observation(
+                    role, phase, turn, scores, built_hexes, frontier_hexes,
+                    [revealed_card] if revealed_card else [],
+                    reality_tiles, tray, []
+                )
+
+            obs_t = torch.tensor(obs_tensor, dtype=torch.float32, device=self.device).unsqueeze(0)
+            num_actions = agent._get_num_actions()
+            legal_mask = torch.ones(1, num_actions, device=self.device)
+
+            with torch.no_grad():
+                output = agent.policy_net(obs_t, legal_mask)
+                if isinstance(output, tuple):
+                    logits = output[0]
+                else:
+                    logits = output
+                probs = torch.softmax(logits, dim=-1)
+                action_idx = torch.argmax(probs, dim=-1).item()
+
+            # Decode action based on phase and role
+            return self._decode_action(role, action_idx, phase, frontier_hexes, hand, nominations, observation)
+
+        except Exception as e:
+            logger.error(f"Error in learned action with agent: {e}")
+            return await self._get_scripted_action(role, observation)
 
     async def _get_scripted_action(
         self, role: Role, observation: Dict

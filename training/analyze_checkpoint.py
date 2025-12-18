@@ -115,19 +115,61 @@ def create_learned_agent(role: Role, checkpoint_path: str, device: str = "cpu") 
     if not TORCH_AVAILABLE:
         raise ImportError("PyTorch required")
 
+    import torch
+    from agents.learned_agent import AlphaZeroNetwork
+
     game = create_game()
     sample_state = game.new_initial_state()
     obs_size = len(sample_state.observation_tensor(int(role)))
     num_actions = game.num_distinct_actions()
 
-    agent = LearnedAgent(
-        int(role),
-        obs_size=obs_size,
-        num_actions=num_actions,
-        device=device,
-    )
-    agent.load_checkpoint(checkpoint_path)
-    return agent
+    # Load checkpoint to detect architecture
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    arch = checkpoint.get("architecture", "legacy")
+
+    if arch == "alphazero":
+        # AlphaZero architecture
+        hidden_dim = 512
+        num_blocks = 8
+        policy_net = AlphaZeroNetwork(obs_size, num_actions, hidden_dim=hidden_dim, num_blocks=num_blocks)
+        policy_net.load_state_dict(checkpoint["policy_net"])
+        policy_net.to(device)
+        policy_net.eval()
+
+        # Create a wrapper that mimics LearnedAgent interface
+        class AlphaZeroAgent:
+            def __init__(self, net, role, dev):
+                self.policy_net = net
+                self.role = role
+                self.device = dev
+
+            def step(self, state):
+                obs = torch.tensor(state.observation_tensor(self.role), dtype=torch.float32, device=self.device).unsqueeze(0)
+                with torch.no_grad():
+                    logits, value = self.policy_net(obs)
+                    probs = torch.softmax(logits, dim=-1)
+
+                legal_actions = state.legal_actions(self.role)
+                if not legal_actions:
+                    return None
+
+                # Mask illegal actions
+                legal_probs = probs[0, legal_actions].cpu().numpy()
+                legal_probs = legal_probs / legal_probs.sum()
+                action = legal_actions[int(legal_probs.argmax())]
+                return action
+
+        return AlphaZeroAgent(policy_net, int(role), device)
+    else:
+        # Legacy architecture
+        agent = LearnedAgent(
+            int(role),
+            obs_size=obs_size,
+            num_actions=num_actions,
+            device=device,
+        )
+        agent.load_checkpoint(checkpoint_path)
+        return agent
 
 
 def create_scripted_agent(role: Role, seed: Optional[int] = None) -> Any:

@@ -49,6 +49,7 @@ var _game_id: String = "" # Unique game session ID for multiplayer support
 # ─────────────────────────────────────────────────────────────────────────────
 
 func _ready() -> void:
+	print("[RL DEBUG] RLClient._ready() called, auto_connect=%s server_url=%s" % [auto_connect, server_url])
 	_socket = WebSocketPeer.new()
 
 	# Setup reconnect timer
@@ -58,6 +59,7 @@ func _ready() -> void:
 	add_child(_reconnect_timer)
 
 	if auto_connect:
+		print("[RL DEBUG] RLClient: auto_connect is true, connecting now...")
 		connect_to_server()
 
 
@@ -73,6 +75,7 @@ func _process(_delta: float) -> void:
 		WebSocketPeer.STATE_OPEN:
 			if not _is_connected:
 				_is_connected = true
+				print("[RL DEBUG] >>> RLClient CONNECTED to %s <<<" % server_url)
 				DebugLogger.log("RLClient: Connected to %s" % server_url)
 				connected.emit()
 
@@ -89,6 +92,7 @@ func _process(_delta: float) -> void:
 				_is_connected = false
 				var code := _socket.get_close_code()
 				var reason := _socket.get_close_reason()
+				print("[RL DEBUG] RLClient DISCONNECTED (code=%d, reason=%s)" % [code, reason])
 				DebugLogger.log("RLClient: Disconnected (code=%d, reason=%s)" % [code, reason])
 				disconnected.emit()
 
@@ -114,13 +118,17 @@ func connect_to_server(url: String = "") -> void:
 	if _is_connected:
 		disconnect_from_server()
 
+	print("[RL DEBUG] RLClient.connect_to_server: Connecting to %s" % server_url)
 	DebugLogger.log("RLClient: Connecting to %s" % server_url)
 	var err := _socket.connect_to_url(server_url)
 	if err != OK:
+		print("[RL DEBUG] RLClient: Connection FAILED with error %d" % err)
 		DebugLogger.log("RLClient: Failed to connect: %d" % err)
 		error.emit("Failed to connect: %d" % err)
 		if auto_reconnect:
 			_schedule_reconnect()
+	else:
+		print("[RL DEBUG] RLClient: connect_to_url() called successfully, waiting for connection...")
 
 
 ## Disconnect from the server
@@ -282,7 +290,18 @@ func build_observation(
 		"scores": game_manager.scores.duplicate(),
 		"built_hexes": _serialize_hex_array(game_manager.built_hexes),
 		"frontier_hexes": _serialize_hex_array(frontier),
+		# Control phase constraints - critical for legal action filtering
+		"control_mode": int(game_manager.control_mode),
+		"forced_suit_config": int(game_manager.forced_suit_config),
 	}
+
+	# Add forced hexes if control_mode is FORCE_HEXES
+	if game_manager.control_mode == game_manager.ControlMode.FORCE_HEXES:
+		var fh: Dictionary = {}
+		for key in game_manager.forced_hexes:
+			var hex: Vector3i = game_manager.forced_hexes[key]
+			fh[key] = [hex.x, hex.y, hex.z]
+		observation["forced_hexes"] = fh
 
 	# Add revealed cards (uses revealed_indices array, take first for compatibility)
 	if game_manager.revealed_indices.size() > 0:
@@ -429,7 +448,11 @@ func _get_fallback_action(role: int, observation: Dictionary) -> Dictionary:
 					best_idx = i
 			return {"card_index": best_idx, "action_type": "reveal"}
 
-		elif phase == 3: # PLACE
+		elif phase == 2: # CONTROL (NEW)
+			# Simple control heuristic: always use force_suits config 0
+			return {"config": 0, "control_type": "suits", "action_type": "control"}
+
+		elif phase == 4: # PLACE (was 3, now 4 due to CONTROL phase)
 			# Simple placement heuristic
 			return {"card_index": 0, "hex": frontier[0] if frontier.size() > 0 else [0, 0, 0], "action_type": "place"}
 
@@ -495,7 +518,7 @@ func _get_visible_reality(map_layers: Resource, frontier: Array) -> Dictionary:
 
 
 # #region agent log
-const DEBUG_LOG_PATH := "/Users/sweater/Github/collapsization/.cursor/debug.log"
+const DEBUG_LOG_PATH := "/Users/sweater/Github/collapsization-red/.cursor/debug.log"
 
 func _debug_log(hypothesis: String, message: String, data: Dictionary = {}) -> void:
 	var log_entry := {

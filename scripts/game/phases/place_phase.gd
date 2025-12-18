@@ -14,7 +14,7 @@ func place(gm, card_index: int, hex: Vector3i) -> void:
 	if not gm.GameRules.is_nominated_hex(hex, gm.nominations):
 		return
 
-	# Capture full hand BEFORE modifying (needed for optimal build scoring)
+	# Capture full hand BEFORE modifying (kept for API compatibility)
 	var full_hand: Array = gm.hand.duplicate(true)
 
 	var card: Dictionary = gm.hand[card_index]
@@ -68,11 +68,24 @@ func place(gm, card_index: int, hex: Vector3i) -> void:
 	gm.hand_updated.emit(gm.hand, gm.revealed_indices)
 	gm._broadcast_state()
 
-	# Check if the REALITY at this hex is SPADES (not the placed card!)
-	# Game ends when Mayor builds on a tile that is actually a spade in reality
+	# Check if the REALITY at this hex is SPADES - Mayor LOSES IMMEDIATELY
 	var reality_is_spade: bool = gm._check_reality_is_spade(hex, card)
 	if reality_is_spade:
-		gm._finish_game("Mayor built on a SPADE tile! (Advisor may have lied)")
+		gm.mayor_hit_mine = true # Mayor loses regardless of score
+		gm._finish_game("Mayor built on a SPADE tile! MAYOR LOSES!")
+		return
+
+	# Track facility builds by reality suit (Mayor's endgame progress)
+	var reality_suit: int = reality.get("suit", -1)
+	if reality_suit == gm.MapLayers.Suit.HEARTS:
+		gm.facilities["hearts"] += 1
+	elif reality_suit == gm.MapLayers.Suit.DIAMONDS:
+		gm.facilities["diamonds"] += 1
+
+	# Check for city completion (Mayor's endgame: 10♥ + 10♦ ends the game)
+	if gm.facilities["hearts"] >= gm.FACILITIES_TO_COMPLETE and gm.facilities["diamonds"] >= gm.FACILITIES_TO_COMPLETE:
+		gm.city_complete = true
+		gm._finish_game("Mayor completed the city! (10♥ + 10♦)")
 		return
 
 	gm.turn_index += 1

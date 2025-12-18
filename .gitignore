@@ -44,3 +44,12 @@ Desktop.ini
 training/.training-manager.state
 training/results/
 training/checkpoints/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Godot UID files (auto-generated, machine-specific)
+*.uid

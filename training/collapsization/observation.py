@@ -6,12 +6,14 @@ Observations are role-specific due to asymmetric information:
 """
 
 import numpy as np
-from typing import Optional
+from typing import Optional, Dict
 
 from .constants import (
     Suit,
     Phase,
     Role,
+    ControlMode,
+    SuitConfig,
     NUM_SUITS,
     NUM_RANKS,
     NUM_CARDS,
@@ -22,11 +24,14 @@ from .constants import (
 
 
 # Observation dimensions
-PHASE_DIM = 5  # One-hot for phases (LOBBY, DRAW, NOMINATE, PLACE, GAME_OVER)
+PHASE_DIM = 6  # One-hot for phases (LOBBY, DRAW, CONTROL, NOMINATE, PLACE, GAME_OVER)
+CONTROL_MODE_DIM = 3  # NONE, FORCE_SUITS, FORCE_HEXES
+SUIT_CONFIG_DIM = 2  # URB_DIAMOND_IND_HEART, URB_HEART_IND_DIAMOND
 SCORE_DIM = NUM_PLAYERS  # 3 scores
 CARD_DIM = NUM_CARDS + 1  # 39 cards + 1 null indicator = 40
 HAND_SIZE = 4  # Mayor now draws 4 cards
 REVEALED_CARDS = 2  # Mayor reveals 2 cards
+FACILITY_DIM = 2  # Hearts and Diamonds facility progress (normalized 0-1)
 
 # For a reasonable game, frontier rarely exceeds ~50 hexes
 MAX_FRONTIER_SIZE = 50
@@ -75,9 +80,13 @@ class ObservationEncoder:
             PHASE_DIM  # Phase one-hot
             + 1  # Turn counter (normalized)
             + SCORE_DIM  # Scores
+            + FACILITY_DIM  # Hearts/Diamonds facility progress (Mayor's endgame)
             + MAX_BUILT_SIZE  # Built hex mask
             + self.max_frontier  # Frontier hex mask
             + CARD_DIM * REVEALED_CARDS  # 2 revealed cards
+            + CONTROL_MODE_DIM  # Control mode one-hot
+            + SUIT_CONFIG_DIM  # Suit config one-hot (or zeros if not FORCE_SUITS)
+            + self.max_frontier * 2  # Forced hexes (one mask per advisor)
         )
 
     @property
@@ -130,6 +139,20 @@ class ObservationEncoder:
                 mask[idx] = 1.0
         return mask
 
+    def encode_control_mode(self, control_mode: ControlMode) -> np.ndarray:
+        """Encode control mode as one-hot vector."""
+        vec = np.zeros(CONTROL_MODE_DIM, dtype=np.float32)
+        if 0 <= int(control_mode) < CONTROL_MODE_DIM:
+            vec[int(control_mode)] = 1.0
+        return vec
+
+    def encode_suit_config(self, suit_config: Optional[SuitConfig]) -> np.ndarray:
+        """Encode suit configuration as one-hot vector."""
+        vec = np.zeros(SUIT_CONFIG_DIM, dtype=np.float32)
+        if suit_config is not None and 0 <= int(suit_config) < SUIT_CONFIG_DIM:
+            vec[int(suit_config)] = 1.0
+        return vec
+
     def encode_common(
         self,
         phase: Phase,
@@ -138,8 +161,13 @@ class ObservationEncoder:
         built_hexes: list[tuple[int, int, int]],
         frontier_hexes: list[tuple[int, int, int]],
         revealed_cards: list[dict],
+        control_mode: ControlMode = ControlMode.NONE,
+        forced_suit_config: Optional[SuitConfig] = None,
+        forced_hexes: Optional[dict[str, tuple[int, int, int]]] = None,
+        facilities: Optional[dict[str, int]] = None,
     ) -> np.ndarray:
         """Encode features common to all players."""
+        facilities = facilities or {"hearts": 1, "diamonds": 0}
         parts = [
             self.encode_phase(phase),
             np.array([turn / 50.0], dtype=np.float32),  # Normalized turn
@@ -151,6 +179,14 @@ class ObservationEncoder:
                 ],
                 dtype=np.float32,
             ),
+            # Facility progress (Mayor's endgame condition: 10♥ + 10♦)
+            np.array(
+                [
+                    facilities.get("hearts", 0) / 10.0,  # Normalized to 0-1
+                    facilities.get("diamonds", 0) / 10.0,
+                ],
+                dtype=np.float32,
+            ),
             self.encode_hex_mask(built_hexes, MAX_BUILT_SIZE),
             self.encode_hex_mask(frontier_hexes, self.max_frontier),
         ]
@@ -158,6 +194,26 @@ class ObservationEncoder:
         for i in range(REVEALED_CARDS):
             card = revealed_cards[i] if i < len(revealed_cards) else None
             parts.append(self.encode_card(card))
+
+        # Encode control state
+        parts.append(self.encode_control_mode(control_mode))
+        parts.append(self.encode_suit_config(forced_suit_config))
+
+        # Encode forced hexes (one mask per advisor)
+        forced_hexes = forced_hexes or {}
+        urb_forced_hex = forced_hexes.get("urbanist")
+        ind_forced_hex = forced_hexes.get("industry")
+        parts.append(
+            self.encode_hex_mask(
+                [urb_forced_hex] if urb_forced_hex else [], self.max_frontier
+            )
+        )
+        parts.append(
+            self.encode_hex_mask(
+                [ind_forced_hex] if ind_forced_hex else [], self.max_frontier
+            )
+        )
+
         return np.concatenate(parts)
 
     def encode_nominations(
@@ -197,16 +253,33 @@ class ObservationEncoder:
         hand: list[dict],
         revealed_indices: list[int],
         nominations: list[dict],
+        control_mode: ControlMode = ControlMode.NONE,
+        forced_suit_config: Optional[SuitConfig] = None,
+        forced_hexes: Optional[dict[str, tuple[int, int, int]]] = None,
+        facilities: Optional[dict[str, int]] = None,
     ) -> np.ndarray:
         """Encode full observation for Mayor player.
 
         Args:
             revealed_indices: List of revealed card indices (up to 2).
             nominations: List of nomination dicts (up to 4).
+            control_mode: Current control mode.
+            forced_suit_config: Suit configuration if FORCE_SUITS mode.
+            forced_hexes: Dict of forced hexes per advisor if FORCE_HEXES mode.
+            facilities: Dict of facility counts {"hearts": N, "diamonds": M}.
         """
         revealed_cards = [hand[idx] for idx in revealed_indices if 0 <= idx < len(hand)]
         common = self.encode_common(
-            phase, turn, scores, built_hexes, frontier_hexes, revealed_cards
+            phase,
+            turn,
+            scores,
+            built_hexes,
+            frontier_hexes,
+            revealed_cards,
+            control_mode,
+            forced_suit_config,
+            forced_hexes,
+            facilities,
         )
 
         # Mayor's full hand (4 cards)
@@ -234,15 +307,32 @@ class ObservationEncoder:
         reality_tiles: dict[tuple[int, int, int], dict],
         tray_remaining: list[int],
         nominations: list[dict],
+        control_mode: ControlMode = ControlMode.NONE,
+        forced_suit_config: Optional[SuitConfig] = None,
+        forced_hexes: Optional[dict[str, tuple[int, int, int]]] = None,
+        facilities: Optional[dict[str, int]] = None,
     ) -> np.ndarray:
         """Encode full observation for Advisor player (Industry or Urbanist).
 
         Args:
             revealed_cards: List of revealed cards (up to 2).
             nominations: List of nomination dicts (up to 4).
+            control_mode: Current control mode.
+            forced_suit_config: Suit configuration if FORCE_SUITS mode.
+            forced_hexes: Dict of forced hexes per advisor if FORCE_HEXES mode.
+            facilities: Dict of facility counts {"hearts": N, "diamonds": M}.
         """
         common = self.encode_common(
-            phase, turn, scores, built_hexes, frontier_hexes, revealed_cards
+            phase,
+            turn,
+            scores,
+            built_hexes,
+            frontier_hexes,
+            revealed_cards,
+            control_mode,
+            forced_suit_config,
+            forced_hexes,
+            facilities,
         )
 
         # Reality tiles on frontier

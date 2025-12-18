@@ -22,6 +22,7 @@ State is persisted to .training-manager.state
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -65,6 +66,14 @@ class TrainingManagerState:
     # Track downloaded checkpoints to avoid re-downloading
     downloaded_checkpoints: list = field(default_factory=list)
 
+    # Instances that failed to destroy (we "owe" these destroys)
+    pending_destroys: list = field(default_factory=list)
+
+    # Training run tracking (to associate checkpoints with specific runs)
+    training_run_id: Optional[str] = None  # Format: "{instance_id}_{timestamp}"
+    training_run_started: Optional[str] = None
+    training_run_config_hash: Optional[str] = None  # Hash of training config
+
     STATE_FILE = Path(__file__).parent / ".training-manager.state"
 
     def save(self):
@@ -87,6 +96,15 @@ class TrainingManagerState:
                     data["config_snapshot"] = {}
                 if "downloaded_checkpoints" not in data:
                     data["downloaded_checkpoints"] = []
+                if "pending_destroys" not in data:
+                    data["pending_destroys"] = []
+                # Training run tracking fields
+                if "training_run_id" not in data:
+                    data["training_run_id"] = None
+                if "training_run_started" not in data:
+                    data["training_run_started"] = None
+                if "training_run_config_hash" not in data:
+                    data["training_run_config_hash"] = None
                 return cls(**data)
             except (json.JSONDecodeError, TypeError) as e:
                 print(f"[Warning] Failed to load state: {e}, starting fresh")
@@ -102,6 +120,10 @@ class TrainingManagerState:
         self.training_started_at = None
         self.progress_history = []
         self.downloaded_checkpoints = []
+        # Clear training run tracking
+        self.training_run_id = None
+        self.training_run_started = None
+        self.training_run_config_hash = None
         self.save()
 
 
@@ -302,6 +324,7 @@ def ssh_command(
     cmd: str,
     capture: bool = False,
     timeout: int = 60,
+    debug: bool = False,
 ) -> subprocess.CompletedProcess:
     """Run SSH command on remote instance."""
     if not state.instance_host or not state.instance_port:
@@ -314,7 +337,9 @@ def ssh_command(
         "-o",
         "UserKnownHostsFile=/dev/null",
         "-o",
-        "ConnectTimeout=10",
+        "ConnectTimeout=15",
+        "-o",
+        "BatchMode=yes",
         "-p",
         str(state.instance_port),
     ]
@@ -325,8 +350,16 @@ def ssh_command(
     ssh_args.append(f"root@{state.instance_host}")
     ssh_args.append(cmd)
 
+    if debug:
+        print(f"[SSH] Running: {' '.join(ssh_args[:6])}... '{cmd[:50]}...'")
+
     if capture:
-        return subprocess.run(ssh_args, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(
+            ssh_args, capture_output=True, text=True, timeout=timeout
+        )
+        if debug and result.returncode != 0:
+            print(f"[SSH] Failed (rc={result.returncode}): {result.stderr[:200]}")
+        return result
     else:
         return subprocess.run(ssh_args, timeout=timeout)
 
@@ -453,6 +486,13 @@ class TrainingManager:
         self.state = TrainingManagerState.load()
         self.client = VastClient()
 
+        # Note: We no longer hydrate downloaded_checkpoints from disk here.
+        # Each training run has its own run ID, and checkpoints are tracked
+        # per-run to avoid conflating checkpoints from different training runs.
+
+        # Process any pending destroys from previous failed attempts
+        self.process_pending_destroys()
+
     def provision(self) -> bool:
         """Provision a new instance (or reconnect to existing)."""
         # Check if we already have an instance
@@ -511,6 +551,17 @@ class TrainingManager:
                 ssh_host = instance.get("ssh_host")
                 ssh_port = instance.get("ssh_port", 22)
 
+                # Debug: show all instance info
+                print(f"[Provision Debug] Instance details:")
+                for key in [
+                    "ssh_host",
+                    "ssh_port",
+                    "public_ipaddr",
+                    "direct_port_start",
+                    "direct_port_end",
+                ]:
+                    print(f"[Provision Debug]   {key}: {instance.get(key)}")
+
                 # Save state IMMEDIATELY
                 self.state.instance_id = instance_id
                 self.state.instance_host = ssh_host
@@ -520,48 +571,125 @@ class TrainingManager:
 
                 # Wait for SSH to be ready (not just instance status)
                 print(f"[Provision] Instance running, waiting for SSH to be ready...")
+                print(f"[Provision] Will connect to: root@{ssh_host}:{ssh_port}")
                 if self._wait_for_ssh():
                     print(f"[Provision] Ready: {ssh_host}:{ssh_port}")
                     return True
                 else:
                     print("[Provision] SSH failed to become ready")
+                    print("[Provision] Check if your SSH key is uploaded to Vast.ai!")
+                    print(f"[Provision] Key path: {self.config.ssh_key_path}")
                     return False
 
         print("[Provision] Timeout waiting for instance")
         return False
 
-    def _wait_for_ssh(self, max_retries: int = 12, delay: int = 5) -> bool:
+    def _wait_for_ssh(self, max_retries: int = 20, delay: int = 10) -> bool:
         """Wait for SSH to be ready with retries."""
+        print(
+            f"[SSH Debug] Connecting to {self.state.instance_host}:{self.state.instance_port}"
+        )
+        print(f"[SSH Debug] Using key: {self.config.ssh_key_path}")
+        print(f"[SSH Debug] Key exists: {os.path.exists(self.config.ssh_key_path)}")
+
         for attempt in range(max_retries):
             try:
-                result = ssh_command(
-                    self.state,
-                    self.config,
-                    "echo SSH_READY",
-                    capture=True,
-                    timeout=15,
+                # Build SSH command manually for debugging
+                ssh_args = [
+                    "ssh",
+                    "-v",  # Verbose for debugging
+                    "-o",
+                    "StrictHostKeyChecking=no",
+                    "-o",
+                    "UserKnownHostsFile=/dev/null",
+                    "-o",
+                    "ConnectTimeout=15",
+                    "-o",
+                    "BatchMode=yes",  # Don't prompt for password
+                    "-p",
+                    str(self.state.instance_port),
+                ]
+                if self.config.ssh_key_path and os.path.exists(
+                    self.config.ssh_key_path
+                ):
+                    ssh_args.extend(["-i", self.config.ssh_key_path])
+                ssh_args.append(f"root@{self.state.instance_host}")
+                ssh_args.append("echo SSH_READY")
+
+                print(
+                    f"[SSH Debug] Attempt {attempt + 1}/{max_retries}: {' '.join(ssh_args[:8])}..."
                 )
+
+                result = subprocess.run(
+                    ssh_args,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+
+                print(f"[SSH Debug]   Return code: {result.returncode}")
+                if result.stdout.strip():
+                    print(f"[SSH Debug]   Stdout: {result.stdout.strip()[:200]}")
+                if result.stderr.strip():
+                    # Filter verbose output to show key info
+                    stderr_lines = result.stderr.strip().split("\n")
+                    important_lines = [
+                        l
+                        for l in stderr_lines
+                        if any(
+                            x in l.lower()
+                            for x in [
+                                "error",
+                                "fail",
+                                "denied",
+                                "refused",
+                                "timeout",
+                                "authenticity",
+                                "connected",
+                                "identity",
+                            ]
+                        )
+                    ]
+                    if important_lines:
+                        print(
+                            f"[SSH Debug]   Key stderr: {'; '.join(important_lines[:5])}"
+                        )
+                    elif len(stderr_lines) > 0:
+                        print(f"[SSH Debug]   Stderr (last): {stderr_lines[-1][:100]}")
+
                 if result.returncode == 0 and "SSH_READY" in result.stdout:
+                    print(f"[SSH Debug] SUCCESS! SSH is ready.")
                     return True
+
             except subprocess.TimeoutExpired:
-                pass
+                print(f"[SSH Debug]   Timeout after 30s")
             except Exception as e:
-                print(f"[Provision]   SSH attempt {attempt + 1}/{max_retries}: {e}")
+                print(f"[SSH Debug]   Exception: {type(e).__name__}: {e}")
 
             if attempt < max_retries - 1:
-                print(f"[Provision]   SSH not ready, retrying in {delay}s...")
+                print(f"[SSH Debug]   Waiting {delay}s before retry...")
                 time.sleep(delay)
 
+        print(f"[SSH Debug] FAILED after {max_retries} attempts")
         return False
 
     def setup(self) -> bool:
         """Upload code and setup environment."""
         print("[Setup] Uploading training code...")
+        print(f"[Setup Debug] Local dir: {self.config.local_training_dir}")
+        print(f"[Setup Debug] Remote dir: {self.config.remote_dir}")
 
         # Create remote directory
-        ssh_command(self.state, self.config, f"mkdir -p {self.config.remote_dir}")
+        print("[Setup] Creating remote directory...")
+        result = ssh_command(
+            self.state, self.config, f"mkdir -p {self.config.remote_dir}", debug=True
+        )
+        if result.returncode != 0:
+            print(f"[Setup] Failed to create remote directory")
+            return False
 
         # Upload code
+        print("[Setup] Starting rsync upload...")
         if not rsync_upload(
             self.state,
             self.config,
@@ -570,18 +698,49 @@ class TrainingManager:
         ):
             print("[Setup] Failed to upload code")
             return False
+        print("[Setup] Upload complete")
 
-        # Run setup script
-        print("[Setup] Running setup.sh...")
+        # Verify files are there
+        print("[Setup] Verifying uploaded files...")
         result = ssh_command(
             self.state,
             self.config,
-            f"cd {self.config.remote_dir} && chmod +x setup.sh && ./setup.sh",
-            timeout=600,
+            f"ls -la {self.config.remote_dir}/",
+            capture=True,
+            debug=True,
+        )
+        if result.returncode == 0:
+            print(f"[Setup Debug] Remote files:\n{result.stdout[:500]}")
+
+        # Check if setup.sh exists
+        result = ssh_command(
+            self.state,
+            self.config,
+            f"test -f {self.config.remote_dir}/setup.sh && echo EXISTS || echo MISSING",
+            capture=True,
+        )
+        if "MISSING" in result.stdout:
+            print("[Setup] ERROR: setup.sh not found after upload!")
+            return False
+
+        # Run setup script
+        print("[Setup] Running setup.sh (this may take a few minutes)...")
+        result = ssh_command(
+            self.state,
+            self.config,
+            f"cd {self.config.remote_dir} && chmod +x setup.sh && bash -x setup.sh 2>&1",
+            timeout=900,
+            capture=True,
         )
 
         if result.returncode != 0:
-            print("[Setup] Setup script failed")
+            print(f"[Setup] Setup script failed with code {result.returncode}")
+            print(
+                f"[Setup] Output:\n{result.stdout[-2000:] if result.stdout else 'no output'}"
+            )
+            print(
+                f"[Setup] Stderr:\n{result.stderr[-1000:] if result.stderr else 'no stderr'}"
+            )
             return False
 
         print("[Setup] Complete")
@@ -592,12 +751,15 @@ class TrainingManager:
         print(
             f"[Train] Starting {self.config.training_phase} training ({self.config.training_episodes} episodes)..."
         )
+        print(f"[Train Debug] Population size: {self.config.population_size}")
+        print(f"[Train Debug] Save every: {self.config.save_every}")
 
         # Kill existing session
+        print("[Train] Killing any existing tmux session...")
         ssh_command(
             self.state, self.config, "tmux kill-session -t training 2>/dev/null || true"
         )
-        time.sleep(1)
+        time.sleep(2)
 
         # Create training script
         training_script = f"""#!/bin/bash
@@ -645,23 +807,63 @@ tmux send-keys -t training 'bash {self.config.remote_dir}/run_training.sh' Enter
             return False
 
         # Verify
-        time.sleep(2)
+        print("[Train] Waiting for tmux session to initialize...")
+        time.sleep(5)
         result = ssh_command(
             self.state,
             self.config,
             "tmux has-session -t training 2>/dev/null && echo RUNNING || echo STOPPED",
             capture=True,
         )
+        print(f"[Train Debug] Tmux status: {result.stdout.strip()}")
 
         if result.stdout.strip() != "RUNNING":
             print("[Train] Training session failed to start")
+            # Try to get error info
+            result = ssh_command(
+                self.state,
+                self.config,
+                f"tail -50 {self.config.remote_dir}/training.log 2>/dev/null || echo 'No log yet'",
+                capture=True,
+            )
+            print(f"[Train Debug] Log tail:\n{result.stdout}")
             return False
 
+        # Check if training is actually running (not just tmux)
+        time.sleep(3)
+        result = ssh_command(
+            self.state,
+            self.config,
+            f"tail -20 {self.config.remote_dir}/training.log 2>/dev/null || echo 'No log yet'",
+            capture=True,
+        )
+        print(f"[Train Debug] Initial log:\n{result.stdout[:500]}")
+
+        # Generate unique run ID for this training run
+        # This associates all checkpoints with this specific run
+        run_timestamp = int(time.time())
+        self.state.training_run_id = f"{self.state.instance_id}_{run_timestamp}"
+        self.state.training_run_started = datetime.now().isoformat()
+        self.state.training_run_config_hash = self._hash_training_config()
+        self.state.downloaded_checkpoints = []  # Fresh start for new run
         self.state.training_started_at = datetime.now().isoformat()
         self.state.save()
 
+        print(f"[Train] Training run ID: {self.state.training_run_id}")
         print("[Train] Training started in tmux session")
         return True
+
+    def _hash_training_config(self) -> str:
+        """Create a hash of the training configuration for change detection."""
+        import hashlib
+
+        config_str = (
+            f"{self.config.training_phase}:"
+            f"{self.config.training_episodes}:"
+            f"{self.config.population_size}:"
+            f"{self.config.save_every}"
+        )
+        return hashlib.md5(config_str.encode()).hexdigest()[:8]
 
     def check_status(self) -> dict:
         """Check training status."""
@@ -739,139 +941,197 @@ tmux send-keys -t training 'bash {self.config.remote_dir}/run_training.sh' Enter
             print(f"[Checkpoint] Error listing checkpoints: {e}")
             return []
 
-    def download_checkpoint(self, episode: int) -> Optional[Path]:
-        """Download a specific checkpoint to dated/episode directory.
+    def get_local_checkpoints(self, run_id: Optional[str] = None) -> list[int]:
+        """Get list of checkpoint episodes for a specific training run.
 
-        Structure: results/YYYY-MM-DD/NNNNNN/ppo_*.pt
+        Args:
+            run_id: Training run ID. If None, uses current run ID from state.
+                   Returns empty list if no run ID is available.
         """
-        date_str = datetime.now().strftime("%Y-%m-%d")
-        episode_str = f"{episode:07d}"  # Zero-padded to 7 digits
-        dest_dir = Path(self.config.results_dir) / date_str / episode_str
+        run_id = run_id or self.state.training_run_id
+        if not run_id:
+            return []
+
+        run_dir = Path(self.config.results_dir) / run_id
+        if not run_dir.exists():
+            return []
+
+        episodes = set()
+        for ep_dir in run_dir.iterdir():
+            if ep_dir.is_dir():
+                # Check if this directory has the mayor checkpoint
+                for f in ep_dir.glob("ppo_mayor_ep*.pt"):
+                    name = f.stem
+                    try:
+                        ep = int(name.split("_ep")[1])
+                        episodes.add(ep)
+                    except (IndexError, ValueError):
+                        pass
+        return sorted(episodes)
+
+    def _get_cache_checkpoints(self) -> list[int]:
+        """Get list of checkpoint episodes in the rsync cache."""
+        cache_dir = Path(self.config.results_dir) / ".cache"
+        if not cache_dir.exists():
+            return []
+
+        episodes = set()
+        for f in cache_dir.glob("ppo_mayor_ep*.pt"):
+            name = f.stem
+            try:
+                ep = int(name.split("_ep")[1])
+                episodes.add(ep)
+            except (IndexError, ValueError):
+                pass
+        return sorted(episodes)
+
+    def _organize_checkpoint(self, episode: int) -> Optional[Path]:
+        """Move a checkpoint from cache to run-specific directory structure.
+
+        Structure: results/{run_id}/NNNNNN/ppo_*.pt
+        Falls back to date-based structure for legacy runs without run ID.
+        """
+        cache_dir = Path(self.config.results_dir) / ".cache"
+
+        # Use run ID if available, otherwise fall back to date-based
+        if self.state.training_run_id:
+            run_dir = self.state.training_run_id
+        else:
+            run_dir = datetime.now().strftime("%Y-%m-%d")
+
+        episode_str = f"{episode:07d}"
+        dest_dir = Path(self.config.results_dir) / run_dir / episode_str
 
         dest_dir.mkdir(parents=True, exist_ok=True)
-        print(f"[Checkpoint] Downloading episode {episode} to {dest_dir}")
 
-        # Download specific checkpoint files
         roles = ["mayor", "industry", "urbanist"]
+        success = True
+
+        for role in roles:
+            filename = f"ppo_{role}_ep{episode}.pt"
+            src = cache_dir / filename
+            dst = dest_dir / filename
+
+            if src.exists() and not dst.exists():
+                shutil.copy2(src, dst)
+            elif not src.exists():
+                print(f"[Checkpoint] Missing {filename} in cache")
+                success = False
+
+        # Copy training log if present
+        log_src = cache_dir / "training.log"
+        log_dst = dest_dir / "training.log"
+        if log_src.exists():
+            shutil.copy2(log_src, log_dst)
+
+        return dest_dir if success else None
+
+    def sync_checkpoints(self) -> list[int]:
+        """Sync checkpoints from remote using rsync.
+
+        Uses rsync for efficient incremental downloads to a cache directory,
+        then organizes new checkpoints into run-specific folders:
+        results/{run_id}/NNNNNN/ppo_*.pt
+        """
+        cache_dir = Path(self.config.results_dir) / ".cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        # Use rsync to efficiently sync only new/changed files to cache
         ssh_opts = f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p {self.state.instance_port}"
         if self.config.ssh_key_path and os.path.exists(self.config.ssh_key_path):
             ssh_opts += f" -i {self.config.ssh_key_path}"
 
-        success = True
-        for role in roles:
-            filename = f"ppo_{role}_ep{episode}.pt"
-            remote_path = f"{self.config.remote_dir}/checkpoints/{filename}"
-            local_path = dest_dir / filename
-
-            scp_args = [
-                "scp",
-                "-o",
-                "StrictHostKeyChecking=no",
-                "-o",
-                "UserKnownHostsFile=/dev/null",
-                "-P",
-                str(self.state.instance_port),
-            ]
-            if self.config.ssh_key_path and os.path.exists(self.config.ssh_key_path):
-                scp_args.extend(["-i", self.config.ssh_key_path])
-            scp_args.extend(
-                [
-                    f"root@{self.state.instance_host}:{remote_path}",
-                    str(local_path),
-                ]
-            )
-
-            result = subprocess.run(scp_args, capture_output=True)
-            if result.returncode != 0:
-                print(f"[Checkpoint] Failed to download {filename}")
-                success = False
-
-        if success:
-            # Also download the log file
-            log_dest = dest_dir / "training.log"
-            scp_args = [
-                "scp",
-                "-o",
-                "StrictHostKeyChecking=no",
-                "-o",
-                "UserKnownHostsFile=/dev/null",
-                "-P",
-                str(self.state.instance_port),
-            ]
-            if self.config.ssh_key_path and os.path.exists(self.config.ssh_key_path):
-                scp_args.extend(["-i", self.config.ssh_key_path])
-            scp_args.extend(
-                [
-                    f"root@{self.state.instance_host}:{self.config.remote_dir}/training.log",
-                    str(log_dest),
-                ]
-            )
-            subprocess.run(scp_args, capture_output=True)  # Don't fail if log missing
-
-            print(f"[Checkpoint] Downloaded episode {episode}")
-            return dest_dir
-
-        return None
-
-    def sync_checkpoints(self) -> list[int]:
-        """Check for new checkpoints and download them."""
-        available = self.get_available_checkpoints()
-        new_checkpoints = [
-            ep for ep in available if ep not in self.state.downloaded_checkpoints
+        rsync_args = [
+            "rsync",
+            "-avz",
+            "--progress",
+            "-e",
+            f"ssh {ssh_opts}",
+            f"root@{self.state.instance_host}:{self.config.remote_dir}/checkpoints/",
+            f"{cache_dir}/",
         ]
 
+        print(f"[Checkpoint] Syncing checkpoints via rsync...")
+        result = subprocess.run(rsync_args, capture_output=True, text=True)
+
+        if result.returncode != 0:
+            print(f"[Checkpoint] rsync failed: {result.stderr[:200]}")
+            return []
+
+        # Also sync the log file
+        log_rsync_args = [
+            "rsync",
+            "-avz",
+            "-e",
+            f"ssh {ssh_opts}",
+            f"root@{self.state.instance_host}:{self.config.remote_dir}/training.log",
+            f"{cache_dir}/",
+        ]
+        subprocess.run(log_rsync_args, capture_output=True)
+
+        # Find new checkpoints (in cache but not yet organized)
+        cached = set(self._get_cache_checkpoints())
+        organized = set(self.state.downloaded_checkpoints)
+        new_episodes = sorted(cached - organized)
+
+        # Organize new checkpoints into dated directories
         downloaded = []
-        for ep in sorted(new_checkpoints):
-            dest = self.download_checkpoint(ep)
+        for ep in new_episodes:
+            dest = self._organize_checkpoint(ep)
             if dest:
                 self.state.downloaded_checkpoints.append(ep)
                 downloaded.append(ep)
+                print(f"[Checkpoint] Organized episode {ep} -> {dest}")
 
         if downloaded:
+            self.state.downloaded_checkpoints = sorted(
+                self.state.downloaded_checkpoints
+            )
             self.state.save()
 
         return downloaded
 
-    def download_results(self, dest_dir: Optional[Path] = None) -> Optional[Path]:
-        """Download all training results (final download)."""
-        if dest_dir is None:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            dest_dir = Path(self.config.results_dir) / f"training_{timestamp}"
+    def download_results(self) -> Optional[Path]:
+        """Download all training results (final download).
 
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        print(f"[Download] Downloading all results to {dest_dir}")
+        Uses rsync to sync to cache, then organizes into dated directories.
+        """
+        print("[Download] Final sync of all results...")
 
-        # Download all checkpoints
-        rsync_download(
-            self.state,
-            self.config,
-            f"{self.config.remote_dir}/checkpoints",
-            str(dest_dir / "checkpoints"),
-        )
+        # This does rsync + organize in one go
+        self.sync_checkpoints()
 
-        # Download log
-        ssh_command(
-            self.state,
-            self.config,
-            f"cp {self.config.remote_dir}/training.log {self.config.remote_dir}/checkpoints/ 2>/dev/null || true",
-        )
+        # Return the results directory
+        results_dir = Path(self.config.results_dir)
+        print(f"[Download] Complete: {results_dir}")
+        return results_dir
 
-        print(f"[Download] Complete: {dest_dir}")
-        return dest_dir
+    def verify_integrity(self) -> bool:
+        """Verify final checkpoint integrity."""
+        final_ep = self.config.training_episodes
 
-    def verify_integrity(self, dest_dir: Path) -> bool:
-        """Verify checkpoint integrity."""
+        # Check cache first (rsync destination)
+        cache_dir = Path(self.config.results_dir) / ".cache"
         expected_files = [
-            f"ppo_{role}_ep{self.config.training_episodes}.pt"
-            for role in ["mayor", "industry", "urbanist"]
+            f"ppo_{role}_ep{final_ep}.pt" for role in ["mayor", "industry", "urbanist"]
         ]
 
-        checkpoints_dir = dest_dir / "checkpoints"
-        missing = [f for f in expected_files if not (checkpoints_dir / f).exists()]
+        missing = [f for f in expected_files if not (cache_dir / f).exists()]
 
         if missing:
-            print(f"[Verify] Missing checkpoints: {missing}")
+            print(f"[Verify] Missing final checkpoints in cache: {missing}")
             return False
+
+        # Also verify it's been organized
+        if final_ep not in self.state.downloaded_checkpoints:
+            print(f"[Verify] Final checkpoint {final_ep} not yet organized")
+            # Try to organize it
+            self._organize_checkpoint(final_ep)
+            self.state.downloaded_checkpoints.append(final_ep)
+            self.state.downloaded_checkpoints = sorted(
+                self.state.downloaded_checkpoints
+            )
+            self.state.save()
 
         print("[Verify] All expected checkpoints present")
         return True
@@ -892,30 +1152,82 @@ tmux send-keys -t training 'bash {self.config.remote_dir}/run_training.sh' Enter
                 # Check if we got valid instance data
                 if instance and instance.get("ssh_host"):
                     if instance.get("ssh_host") != self.state.instance_host:
-                        print(f"[Destroy] WARNING: Instance mismatch! Use 'destroy --force' to override.")
+                        print(
+                            f"[Destroy] WARNING: Instance mismatch! Use 'destroy --force' to override."
+                        )
                         print(f"[Destroy]   Expected: {self.state.instance_host}")
                         print(f"[Destroy]   Got: {instance.get('ssh_host')}")
                         return False
-                    print(f"[Destroy] Verified instance matches: {instance.get('ssh_host')}")
+                    print(
+                        f"[Destroy] Verified instance matches: {instance.get('ssh_host')}"
+                    )
             except Exception as e:
-                print(f"[Destroy] Could not verify instance (will try to destroy anyway): {e}")
+                print(
+                    f"[Destroy] Could not verify instance (will try to destroy anyway): {e}"
+                )
 
-        # Always try to destroy - the API will tell us if it doesn't exist
+        # Try to destroy - track success/failure
+        destroy_succeeded = False
         try:
             self.client.destroy_instance(instance_id)
             print(f"[Destroy] Instance {instance_id} destroyed successfully")
+            destroy_succeeded = True
         except Exception as e:
             error_msg = str(e).lower()
-            if "not found" in error_msg or "404" in error_msg or "does not exist" in error_msg:
+            if (
+                "not found" in error_msg
+                or "404" in error_msg
+                or "does not exist" in error_msg
+            ):
                 print(f"[Destroy] Instance {instance_id} already gone (not found)")
+                destroy_succeeded = True  # Already gone counts as success
             else:
                 print(f"[Destroy] API error: {e}")
-                print("[Destroy] Instance may or may not be destroyed - check Vast.ai console")
+                print(
+                    "[Destroy] Instance may or may not be destroyed - adding to pending"
+                )
+                # Add to pending destroys so we retry later
+                if instance_id not in self.state.pending_destroys:
+                    self.state.pending_destroys.append(instance_id)
+                    print(f"[Destroy] Added {instance_id} to pending_destroys")
 
-        # Always clear state after attempting destroy
+        # Clear current instance tracking regardless (so we can start fresh)
         self.state.clear_instance()
         print("[Destroy] Local state cleared")
-        return True
+        return destroy_succeeded
+
+    def process_pending_destroys(self) -> None:
+        """Attempt to destroy any instances from previous failed destroy attempts."""
+        if not self.state.pending_destroys:
+            return
+
+        print(f"[Cleanup] Found {len(self.state.pending_destroys)} pending destroy(s)")
+        still_pending = []
+
+        for instance_id in self.state.pending_destroys:
+            print(f"[Cleanup] Retrying destroy for instance {instance_id}...")
+            try:
+                self.client.destroy_instance(instance_id)
+                print(f"[Cleanup] Instance {instance_id} destroyed successfully")
+            except Exception as e:
+                error_msg = str(e).lower()
+                if (
+                    "not found" in error_msg
+                    or "404" in error_msg
+                    or "does not exist" in error_msg
+                ):
+                    print(f"[Cleanup] Instance {instance_id} already gone")
+                else:
+                    print(f"[Cleanup] Failed to destroy {instance_id}: {e}")
+                    still_pending.append(instance_id)
+
+        self.state.pending_destroys = still_pending
+        self.state.save()
+
+        if still_pending:
+            print(f"[Cleanup] {len(still_pending)} instance(s) still pending destroy")
+        else:
+            print("[Cleanup] All pending destroys completed")
 
     def run(self):
         """Main run loop."""
@@ -966,8 +1278,9 @@ tmux send-keys -t training 'bash {self.config.remote_dir}/run_training.sh' Enter
         # Monitor loop
         print("\n[Monitor] Monitoring training (Ctrl+C to stop)...")
         print(f"[Monitor] Checking every {self.config.check_interval} seconds")
+        run_dir = self.state.training_run_id or "YYYY-MM-DD"
         print(
-            f"[Monitor] Checkpoints will be downloaded to: {self.config.results_dir}/YYYY-MM-DD/NNNNNNN/"
+            f"[Monitor] Checkpoints saved to: {self.config.results_dir}/{run_dir}/NNNNNN/"
         )
 
         try:
@@ -995,29 +1308,30 @@ tmux send-keys -t training 'bash {self.config.remote_dir}/run_training.sh' Enter
                     self.state.progress_history, self.config.training_episodes
                 )
 
-                # Show downloaded checkpoints
+                # Show downloaded checkpoints summary
                 if self.state.downloaded_checkpoints:
-                    print(
-                        f"  Downloaded checkpoints: {sorted(self.state.downloaded_checkpoints)}"
-                    )
+                    checkpoints = sorted(self.state.downloaded_checkpoints)
+                    if len(checkpoints) <= 5:
+                        print(f"  Local checkpoints: {checkpoints}")
+                    else:
+                        print(
+                            f"  Local checkpoints: {len(checkpoints)} saved (latest: {checkpoints[-1]})"
+                        )
 
                 # Check completion
                 if status["complete"]:
                     print("\n[Complete] Training finished!")
 
                     # Final sync to make sure we have everything
-                    self.sync_checkpoints()
-
-                    # Download full results as backup
-                    dest_dir = self.download_results()
+                    self.download_results()
 
                     # Verify integrity
-                    if dest_dir and self.verify_integrity(dest_dir):
+                    if self.verify_integrity():
                         print("[Complete] Destroying instance...")
                         self.destroy_instance()
-                        print(f"\n[SUCCESS] Results saved to: {dest_dir}")
+                        run_dir = self.state.training_run_id or "YYYY-MM-DD"
                         print(
-                            f"[SUCCESS] Checkpoints also in: {self.config.results_dir}/YYYY-MM-DD/"
+                            f"\n[SUCCESS] Results saved to: {self.config.results_dir}/{run_dir}/"
                         )
                     else:
                         print("[Warning] Integrity check failed, keeping instance")

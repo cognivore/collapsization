@@ -20,8 +20,8 @@ const SUIT_COLORS := {
 	2: Color(0.3, 0.35, 0.45), # SPADES - dark grey
 }
 
-# Phase names for display
-const PHASE_NAMES := ["LOBBY", "DRAW", "NOMINATE", "PLACE", "GAME OVER"]
+# Phase names for display (updated to include CONTROL phase)
+const PHASE_NAMES := ["LOBBY", "DRAW", "CONTROL", "NOMINATE", "PLACE", "GAME OVER"]
 const ROLE_NAMES := ["Mayor", "Industry Advisor", "Urbanist"]
 
 @export var game_manager_path: NodePath = NodePath("../GameManager")
@@ -56,6 +56,25 @@ var _action_panel := ActionPanel.new()
 @onready var _action_cancel: Button = $BottomPanel/CardPanel/VBox/ActionCard/ActionButtons/ActionCancel
 
 var _card_buttons: Array[Button] = []
+
+# Control panel for Mayor (CONTROL phase)
+var _control_panel: PanelContainer = null
+var _btn_suit_a: Button = null
+var _btn_suit_b: Button = null
+var _btn_force_hexes: Button = null
+
+# Force hex selection state
+var _hex_selection_mode: bool = false
+var _hex_selection_step: int = 0 # 0=urbanist, 1=industry
+var _forced_urbanist_hex: Vector3i = INVALID_HEX
+var _forced_industry_hex: Vector3i = INVALID_HEX
+
+# Hex selection UI elements
+var _hex_selection_panel: PanelContainer = null
+var _hex_selection_label: Label = null
+var _hex_selection_coords: Label = null
+var _hex_selection_confirm: Button = null
+var _hex_selection_cancel: Button = null
 
 # Debug overlay
 var _debug_panel: Control
@@ -332,9 +351,9 @@ func _on_phase_changed(phase: int) -> void:
 	match phase:
 		0: # LOBBY
 			_timer_label.text = "Waiting for players..."
-		1, 2, 3: # DRAW, NOMINATE, PLACE - no time limit
+		1, 2, 3, 4: # DRAW, CONTROL, NOMINATE, PLACE - no time limit
 			_timer_label.text = "Take your time"
-		4: # GAME_OVER
+		5: # GAME_OVER
 			_timer_label.text = "Game Over"
 
 	# Clear selections on phase change
@@ -344,6 +363,15 @@ func _on_phase_changed(phase: int) -> void:
 	_update_role_label()
 	_update_status_for_phase(phase)
 	_update_ui()
+
+	# Show control panel if in CONTROL phase and player is Mayor
+	if phase == GameManager.Phase.CONTROL and _gm and _gm.local_role == 0: # CONTROL phase, Mayor
+		_show_control_panel()
+	else:
+		_hide_control_panel()
+		# Also hide hex selection panel and reset state if we left CONTROL phase
+		if _hex_selection_mode:
+			_finish_hex_selection()
 
 
 func _on_hand_updated(hand: Array, revealed_indices: Array) -> void:
@@ -474,7 +502,7 @@ func _on_game_over(reason: String, final_scores: Dictionary) -> void:
 
 
 func _on_player_count_changed(count: int, required: int) -> void:
-	if _gm and _gm.phase == 0: # LOBBY
+	if _gm and _gm.phase == GameManager.Phase.LOBBY:
 		_status_label.text = "Waiting for players... (%d/%d)" % [count, required]
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -488,16 +516,21 @@ func _on_hex_clicked(cube: Vector3i) -> void:
 	var phase: int = _gm.phase
 	var role: int = _gm.local_role
 
+	# CONTROL phase: Force hex selection mode for Mayor
+	if _hex_selection_mode and phase == GameManager.Phase.CONTROL and role == 0:
+		_on_hex_selected_for_force(cube)
+		return
+
 	# Only allow hex selection in certain phases
 	# NOMINATE phase: Advisors select hex
-	# PLACE phase: Mayor selects hex
-	if phase == 2 and role in [1, 2]: # NOMINATE, INDUSTRY/URBANIST
+	if phase == GameManager.Phase.NOMINATE and role in [1, 2]: # NOMINATE, INDUSTRY/URBANIST
 		_selected_hex = INVALID_HEX if cube == _selected_hex else cube
 		if _selected_hex != INVALID_HEX:
 			_status_label.text = "Selected hex: (%d,%d,%d) - Click COMMIT" % [_selected_hex.x, _selected_hex.y, _selected_hex.z]
 		else:
 			_status_label.text = "Selection cleared"
-	elif phase == 3 and role == 0: # PLACE, MAYOR
+	# PLACE phase: Mayor selects hex
+	elif phase == GameManager.Phase.PLACE and role == 0: # PLACE, MAYOR
 		_selected_hex = INVALID_HEX if cube == _selected_hex else cube
 		if _selected_hex != INVALID_HEX:
 			_status_label.text = "Selected hex: (%d,%d,%d) - Click BUILD" % [_selected_hex.x, _selected_hex.y, _selected_hex.z]
@@ -509,6 +542,23 @@ func _on_hex_clicked(cube: Vector3i) -> void:
 		_hex_field.show_selected_hex(_selected_hex)
 
 	_update_ui()
+
+
+func _on_hex_selected_for_force(cube: Vector3i) -> void:
+	"""Handle hex click during force hex selection mode."""
+	print("[CONTROL UI] Hex selected for force: (%d,%d,%d), step=%d" % [cube.x, cube.y, cube.z, _hex_selection_step])
+
+	if _hex_selection_step == 0:
+		_forced_urbanist_hex = cube
+	else:
+		_forced_industry_hex = cube
+
+	# Update UI
+	_update_hex_selection_ui()
+
+	# Show visual feedback
+	if _hex_field and _hex_field.has_method("show_selected_hex"):
+		_hex_field.show_selected_hex(cube)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CARD UI
@@ -634,10 +684,10 @@ func _on_card_button_pressed(index: int) -> void:
 
 	if _gm:
 		_rebuild_card_buttons(_gm.hand, _gm.revealed_indices)
-		if _gm.phase == 1 and _gm.revealed_indices.size() < 2:
+		if _gm.phase == GameManager.Phase.DRAW and _gm.revealed_indices.size() < 2:
 			var remaining: int = 2 - _gm.revealed_indices.size()
 			_status_label.text = "Card %d selected - click REVEAL (%d more to reveal)" % [index, remaining]
-		elif _gm.phase == 3:
+		elif _gm.phase == GameManager.Phase.PLACE:
 			_status_label.text = "Card %d selected - pick hex + BUILD" % index
 	_update_ui()
 
@@ -730,18 +780,45 @@ func _update_status_for_phase(phase: int) -> void:
 				_status_label.text = "Select a card and click REVEAL"
 			else:
 				_status_label.text = "Mayor is drawing cards..."
-		2: # NOMINATE
+		2: # CONTROL
+			if role == 0: # Mayor
+				_status_label.text = "Choose how to constrain Advisors"
+			else:
+				_status_label.text = "Mayor is choosing control mode..."
+		3: # NOMINATE
 			if role in [1, 2]: # Advisors
-				_status_label.text = "Click a hex to nominate, then COMMIT"
+				var constraint_text := _get_constraint_text_for_advisor()
+				_status_label.text = "Nominate hexes. " + constraint_text
 			else:
 				_status_label.text = "Advisors are deciding..."
-		3: # PLACE
+		4: # PLACE
 			if role == 0: # Mayor
 				_status_label.text = "Select card + nominated hex, then BUILD"
 			else:
 				_status_label.text = "Mayor is placing a card..."
-		4: # GAME_OVER
+		5: # GAME_OVER
 			pass # Handled by _on_game_over
+
+
+## Get constraint text for advisor based on current control mode
+func _get_constraint_text_for_advisor() -> String:
+	if _gm == null:
+		return ""
+
+	var role_key := "industry" if _gm.local_role == 1 else "urbanist"
+
+	# Check forced suit
+	var forced_suit: int = _gm.get_forced_suit_for_role(role_key)
+	if forced_suit >= 0:
+		var suit_name := "Hearts" if forced_suit == 0 else "Diamonds"
+		return "Must claim %s in at least one nomination!" % suit_name
+
+	# Check forced hex
+	var forced_hex: Vector3i = _gm.get_forced_hex_for_role(role_key)
+	if forced_hex != INVALID_HEX:
+		return "First nomination must be at (%d,%d,%d)!" % [forced_hex.x, forced_hex.y, forced_hex.z]
+
+	return ""
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MANUAL CLICK DETECTION (workaround for Godot 4.5 content scaling bug)
@@ -752,7 +829,46 @@ func _input(event: InputEvent) -> void:
 		var mb := event as InputEventMouseButton
 		var pos: Vector2 = mb.position
 
-		# Check card buttons first
+		# Check hex selection panel buttons FIRST
+		if _hex_selection_panel and _hex_selection_panel.visible:
+			if _hex_selection_confirm and _hex_selection_confirm.get_global_rect().has_point(pos):
+				print("[CONTROL UI] Manual click detected on Hex Confirm button")
+				_on_hex_selection_confirm()
+				get_viewport().set_input_as_handled()
+				return
+			if _hex_selection_cancel and _hex_selection_cancel.get_global_rect().has_point(pos):
+				print("[CONTROL UI] Manual click detected on Hex Cancel button")
+				_cancel_hex_selection()
+				get_viewport().set_input_as_handled()
+				return
+			# If click is inside hex selection panel but not on a button, consume event
+			if _hex_selection_panel.get_global_rect().has_point(pos):
+				get_viewport().set_input_as_handled()
+				return
+
+		# Check control panel buttons
+		if _control_panel and _control_panel.visible:
+			if _btn_suit_a and _btn_suit_a.get_global_rect().has_point(pos):
+				print("[CONTROL UI] Manual click detected on Suit A button")
+				_on_force_suit_a()
+				get_viewport().set_input_as_handled()
+				return
+			if _btn_suit_b and _btn_suit_b.get_global_rect().has_point(pos):
+				print("[CONTROL UI] Manual click detected on Suit B button")
+				_on_force_suit_b()
+				get_viewport().set_input_as_handled()
+				return
+			if _btn_force_hexes and _btn_force_hexes.get_global_rect().has_point(pos):
+				print("[CONTROL UI] Manual click detected on Force Hexes button")
+				_start_force_hex_selection()
+				get_viewport().set_input_as_handled()
+				return
+			# If click is inside control panel but not on a button, consume event
+			if _control_panel.get_global_rect().has_point(pos):
+				get_viewport().set_input_as_handled()
+				return
+
+		# Check card buttons
 		for i in range(_card_buttons.size()):
 			var btn: Button = _card_buttons[i]
 			if btn and btn.visible and not btn.disabled and btn.get_global_rect().has_point(pos):
@@ -819,6 +935,12 @@ func _input(event: InputEvent) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	# Right-click to cancel selection
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
+		# If in hex selection mode, cancel it and return to control panel
+		if _hex_selection_mode:
+			_cancel_hex_selection()
+			get_viewport().set_input_as_handled()
+			return
+
 		_selected_card_index = -1
 		_clear_hex_selection()
 		_update_ui()
@@ -888,3 +1010,255 @@ func _log_card_button_positions() -> void:
 	_debug_log("  RevealButton: global_pos=%s size=%s visible=%s" % [_reveal_button.global_position, _reveal_button.size, _reveal_button.visible])
 	_debug_log("  CommitButton: global_pos=%s size=%s visible=%s" % [_commit_button.global_position, _commit_button.size, _commit_button.visible])
 	_debug_log("  BuildButton: global_pos=%s size=%s visible=%s" % [_build_button.global_position, _build_button.size, _build_button.visible])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CONTROL PHASE UI (NEW)
+# ─────────────────────────────────────────────────────────────────────────────
+
+func _show_control_panel() -> void:
+	if _control_panel != null:
+		_control_panel.visible = true
+		return
+
+	# Create control panel dynamically
+	_control_panel = PanelContainer.new()
+	_control_panel.name = "ControlPanel"
+	_control_panel.mouse_filter = Control.MOUSE_FILTER_STOP # Capture mouse events
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 10)
+	vbox.mouse_filter = Control.MOUSE_FILTER_STOP # Capture mouse events
+	_control_panel.add_child(vbox)
+
+	# Title
+	var title := Label.new()
+	title.text = "Choose Control Mode"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 18)
+	vbox.add_child(title)
+
+	# Option A: Force Suits
+	var suits_label := Label.new()
+	suits_label.text = "Force Suit Claims:"
+	vbox.add_child(suits_label)
+
+	var suits_hbox := HBoxContainer.new()
+	suits_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	vbox.add_child(suits_hbox)
+
+	_btn_suit_a = Button.new()
+	_btn_suit_a.text = "Urb→♦ / Ind→♥"
+	_btn_suit_a.custom_minimum_size = Vector2(140, 40)
+	_btn_suit_a.pressed.connect(_on_force_suit_a)
+	_btn_suit_a.mouse_filter = Control.MOUSE_FILTER_STOP
+	suits_hbox.add_child(_btn_suit_a)
+
+	_btn_suit_b = Button.new()
+	_btn_suit_b.text = "Urb→♥ / Ind→♦"
+	_btn_suit_b.custom_minimum_size = Vector2(140, 40)
+	_btn_suit_b.pressed.connect(_on_force_suit_b)
+	_btn_suit_b.mouse_filter = Control.MOUSE_FILTER_STOP
+	suits_hbox.add_child(_btn_suit_b)
+
+	# Option B: Force Hexes
+	var hexes_label := Label.new()
+	hexes_label.text = "Force Hex Selection:"
+	vbox.add_child(hexes_label)
+
+	_btn_force_hexes = Button.new()
+	_btn_force_hexes.text = "Choose Hexes for Each Advisor"
+	_btn_force_hexes.custom_minimum_size = Vector2(290, 40)
+	_btn_force_hexes.pressed.connect(_start_force_hex_selection)
+	_btn_force_hexes.mouse_filter = Control.MOUSE_FILTER_STOP
+	vbox.add_child(_btn_force_hexes)
+
+	# Position at center-top of screen
+	_control_panel.position = Vector2(get_viewport_rect().size.x / 2 - 150, 100)
+	_control_panel.custom_minimum_size = Vector2(320, 180)
+	_control_panel.z_index = 100 # Ensure panel is on top
+	add_child(_control_panel)
+
+	# Force the panel to be interactive
+	_control_panel.set_process_input(true)
+	print("[CONTROL UI] Panel created and shown")
+
+
+func _hide_control_panel() -> void:
+	if _control_panel != null:
+		_control_panel.visible = false
+
+
+func _on_force_suit_a() -> void:
+	print("[CONTROL UI] Force Suit A clicked!")
+	if _gm and _gm.has_method("force_suits"):
+		_gm.force_suits(0) # Urb→Diamond, Ind→Heart
+		_hide_control_panel()
+	else:
+		print("[CONTROL UI] ERROR: _gm=%s has_method=%s" % [_gm, _gm.has_method("force_suits") if _gm else "N/A"])
+
+
+func _on_force_suit_b() -> void:
+	print("[CONTROL UI] Force Suit B clicked!")
+	if _gm and _gm.has_method("force_suits"):
+		_gm.force_suits(1) # Urb→Heart, Ind→Diamond
+		_hide_control_panel()
+	else:
+		print("[CONTROL UI] ERROR: _gm=%s has_method=%s" % [_gm, _gm.has_method("force_suits") if _gm else "N/A"])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FORCE HEX SELECTION UI
+# ─────────────────────────────────────────────────────────────────────────────
+
+func _start_force_hex_selection() -> void:
+	print("[CONTROL UI] Starting force hex selection")
+	_hex_selection_mode = true
+	_hex_selection_step = 0
+	_forced_urbanist_hex = INVALID_HEX
+	_forced_industry_hex = INVALID_HEX
+
+	# Hide main control panel
+	_hide_control_panel()
+
+	# Show hex selection UI
+	_show_hex_selection_ui()
+
+
+func _show_hex_selection_ui() -> void:
+	# Create panel if it doesn't exist
+	if _hex_selection_panel == null:
+		_hex_selection_panel = PanelContainer.new()
+		_hex_selection_panel.name = "HexSelectionPanel"
+		_hex_selection_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+		_hex_selection_panel.z_index = 100
+
+		var vbox := VBoxContainer.new()
+		vbox.add_theme_constant_override("separation", 12)
+		vbox.mouse_filter = Control.MOUSE_FILTER_STOP
+		_hex_selection_panel.add_child(vbox)
+
+		# Title label
+		_hex_selection_label = Label.new()
+		_hex_selection_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_hex_selection_label.add_theme_font_size_override("font_size", 18)
+		vbox.add_child(_hex_selection_label)
+
+		# Coordinates display
+		_hex_selection_coords = Label.new()
+		_hex_selection_coords.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_hex_selection_coords.add_theme_font_size_override("font_size", 16)
+		vbox.add_child(_hex_selection_coords)
+
+		# Button container
+		var btn_hbox := HBoxContainer.new()
+		btn_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+		btn_hbox.add_theme_constant_override("separation", 20)
+		vbox.add_child(btn_hbox)
+
+		_hex_selection_confirm = Button.new()
+		_hex_selection_confirm.text = "Confirm"
+		_hex_selection_confirm.custom_minimum_size = Vector2(120, 40)
+		_hex_selection_confirm.pressed.connect(_on_hex_selection_confirm)
+		_hex_selection_confirm.mouse_filter = Control.MOUSE_FILTER_STOP
+		btn_hbox.add_child(_hex_selection_confirm)
+
+		_hex_selection_cancel = Button.new()
+		_hex_selection_cancel.text = "Cancel"
+		_hex_selection_cancel.custom_minimum_size = Vector2(120, 40)
+		_hex_selection_cancel.pressed.connect(_cancel_hex_selection)
+		_hex_selection_cancel.mouse_filter = Control.MOUSE_FILTER_STOP
+		btn_hbox.add_child(_hex_selection_cancel)
+
+		# Position panel
+		_hex_selection_panel.position = Vector2(get_viewport_rect().size.x / 2 - 150, 100)
+		_hex_selection_panel.custom_minimum_size = Vector2(300, 140)
+		add_child(_hex_selection_panel)
+
+	# Update UI based on current step
+	_update_hex_selection_ui()
+	_hex_selection_panel.visible = true
+
+
+func _update_hex_selection_ui() -> void:
+	if _hex_selection_label == null:
+		return
+
+	var current_hex: Vector3i = INVALID_HEX
+
+	if _hex_selection_step == 0:
+		current_hex = _forced_urbanist_hex
+		_hex_selection_label.text = "Select hex for URBANIST"
+		_hex_selection_label.add_theme_color_override("font_color", Color(0.3, 0.8, 0.4)) # Green for urbanist
+	else:
+		current_hex = _forced_industry_hex
+		_hex_selection_label.text = "Select hex for INDUSTRY"
+		_hex_selection_label.add_theme_color_override("font_color", Color(0.9, 0.6, 0.2)) # Orange for industry
+
+	# Build coordinates text
+	var coords_text: String = ""
+	if _hex_selection_step == 1 and _forced_urbanist_hex != INVALID_HEX:
+		# Show what was selected for Urbanist
+		coords_text = "Urbanist: (%d, %d, %d)\n" % [_forced_urbanist_hex.x, _forced_urbanist_hex.y, _forced_urbanist_hex.z]
+
+	if current_hex != INVALID_HEX:
+		if _hex_selection_step == 0:
+			coords_text += "Selected: (%d, %d, %d)" % [current_hex.x, current_hex.y, current_hex.z]
+		else:
+			coords_text += "Industry: (%d, %d, %d)" % [current_hex.x, current_hex.y, current_hex.z]
+		_hex_selection_coords.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0))
+		_hex_selection_confirm.disabled = false
+	else:
+		coords_text += "Click a hex on the map"
+		_hex_selection_coords.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+		_hex_selection_confirm.disabled = true
+
+	_hex_selection_coords.text = coords_text
+
+
+func _on_hex_selection_confirm() -> void:
+	print("[CONTROL UI] Hex selection confirm clicked, step=%d" % _hex_selection_step)
+
+	if _hex_selection_step == 0:
+		# Urbanist hex confirmed, move to industry
+		if _forced_urbanist_hex == INVALID_HEX:
+			return # No hex selected yet
+
+		_hex_selection_step = 1
+		_update_hex_selection_ui()
+
+		# Update visual feedback - keep urbanist hex highlighted
+		if _hex_field and _hex_field.has_method("show_selected_hex"):
+			_hex_field.show_selected_hex(INVALID_HEX) # Clear current selection highlight
+	else:
+		# Industry hex confirmed, submit both
+		if _forced_industry_hex == INVALID_HEX:
+			return # No hex selected yet
+
+		print("[CONTROL UI] Submitting force_hexes: urb=%v, ind=%v" % [_forced_urbanist_hex, _forced_industry_hex])
+
+		if _gm and _gm.has_method("force_hexes"):
+			_gm.force_hexes(_forced_urbanist_hex, _forced_industry_hex)
+
+		_finish_hex_selection()
+
+
+func _cancel_hex_selection() -> void:
+	print("[CONTROL UI] Hex selection cancelled")
+	_finish_hex_selection()
+	# Re-show main control panel
+	_show_control_panel()
+
+
+func _finish_hex_selection() -> void:
+	_hex_selection_mode = false
+	_hex_selection_step = 0
+	_forced_urbanist_hex = INVALID_HEX
+	_forced_industry_hex = INVALID_HEX
+
+	if _hex_selection_panel:
+		_hex_selection_panel.visible = false
+
+	# Clear any hex highlights
+	if _hex_field and _hex_field.has_method("show_selected_hex"):
+		_hex_field.show_selected_hex(INVALID_HEX)

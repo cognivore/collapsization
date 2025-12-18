@@ -9,9 +9,10 @@ const VALID_HEX := Vector3i(1, -1, 0)
 # Phase constants (matching GameManager)
 const LOBBY := 0
 const DRAW := 1
-const NOMINATE := 2
-const PLACE := 3
-const GAME_OVER := 4
+const CONTROL := 2
+const NOMINATE := 3
+const PLACE := 4
+const GAME_OVER := 5
 
 # Role constants
 const MAYOR := 0
@@ -123,5 +124,3 @@ func test_action_card_visibility_mayor() -> void:
 func test_action_card_hidden_for_advisors() -> void:
 	var state := _panel.compute_state(INDUSTRY, NOMINATE, 0, VALID_HEX, [0, 1])
 	assert_false(state.show_action_card, "Action card hidden for advisors")
-
-

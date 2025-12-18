@@ -31,9 +31,23 @@ signal player_count_changed(count: int, required: int)
 enum Phase {
 	LOBBY, # Waiting for 3 players
 	DRAW, # Mayor has 4 cards, must reveal 2
+	CONTROL, # NEW: Mayor chooses how to constrain Advisors
 	NOMINATE, # Advisors commit nominations (hidden until all 4 commit)
 	PLACE, # Mayor picks card + nominated hex
 	GAME_OVER, # Spade placed or error
+}
+
+## Control mode options for Mayor
+enum ControlMode {
+	NONE, # No control chosen yet
+	FORCE_SUITS, # Mayor forces suit assignments
+	FORCE_HEXES, # Mayor forces hex assignments
+}
+
+## Suit configuration options for FORCE_SUITS mode
+enum SuitConfig {
+	URB_DIAMOND_IND_HEART, # Urbanist→Diamonds, Industry→Hearts
+	URB_HEART_IND_DIAMOND, # Urbanist→Hearts, Industry→Diamonds
 }
 
 enum Role {MAYOR, INDUSTRY, URBANIST}
@@ -44,6 +58,7 @@ enum Role {MAYOR, INDUSTRY, URBANIST}
 
 const INVALID_HEX := Vector3i(0x7FFFFFFF, 0, 0)
 const REQUIRED_PLAYERS := 3
+const FACILITIES_TO_COMPLETE := 10 # Mayor needs 10 Hearts + 10 Diamonds to end game
 
 # ─────────────────────────────────────────────────────────────────────────────
 # EXPORTS
@@ -78,6 +93,11 @@ var turn_history: Array = [] # Array of {revealed, nominations, build, reality, 
 # Format: advisor_commits = {role: Array of {hex: Vector3i, claim: Dictionary}}
 # Format: nominations = Array of {hex: Vector3i, claim: Dictionary, advisor: String}
 var advisor_commits := {"industry": [], "urbanist": []} # 2 nominations per advisor
+
+# Control phase state (NEW)
+var control_mode: ControlMode = ControlMode.NONE
+var forced_suit_config: SuitConfig = SuitConfig.URB_DIAMOND_IND_HEART # Default, only used if control_mode == FORCE_SUITS
+var forced_hexes: Dictionary = {} # {role_key: Vector3i} for FORCE_HEXES mode
 var nominations: Array = [] # Flat list for Mayor (up to 4 entries)
 var _sub_phase: String = "industry_commit_1" # Track nomination sub-phase
 
@@ -88,6 +108,12 @@ var last_placement: Dictionary = {}
 var scores := {"mayor": 0, "industry": 0, "urbanist": 0}
 var advisor_visibility: Array = []
 var local_fog: Array = []
+
+# Mayor's endgame: Track facilities built by reality suit
+# Town center starts as A♥, so hearts starts at 1
+var facilities := {"hearts": 1, "diamonds": 0}
+var city_complete := false # True when Mayor reaches 10♥ + 10♦
+var mayor_hit_mine := false # True when Mayor builds on Spade (Mayor loses immediately)
 
 # Deck management
 var _deck: Array[Dictionary] = []
@@ -116,11 +142,13 @@ var _bot_roles: Array[Role] = [] # Roles controlled by bots
 # ─────────────────────────────────────────────────────────────────────────────
 
 func _ready() -> void:
+	print("[RL DEBUG] GameManager._ready() called, instance_id=%d" % get_instance_id())
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	_bind_hex_field()
 	_bind_network()
 	_init_phase_handlers()
 	_init_rl_client()
+	print("[RL DEBUG] GameManager._ready() complete, use_rl_bots=%s, _rl_client=%s" % [use_rl_bots, _rl_client])
 
 
 func _bind_hex_field() -> void:
@@ -141,30 +169,36 @@ func _bind_network() -> void:
 
 func _init_phase_handlers() -> void:
 	var draw_script = load("res://scripts/game/phases/draw_phase.gd")
+	var control_script = load("res://scripts/game/phases/control_phase.gd")
 	var nominate_script = load("res://scripts/game/phases/nominate_phase.gd")
 	var place_script = load("res://scripts/game/phases/place_phase.gd")
 
-	if draw_script == null or nominate_script == null or place_script == null:
+	if draw_script == null or control_script == null or nominate_script == null or place_script == null:
 		push_error("GameManager: Failed to load phase handler scripts!")
 		return
 
 	_phase_handlers = {
 		Phase.DRAW: draw_script.new(),
+		Phase.CONTROL: control_script.new(),
 		Phase.NOMINATE: nominate_script.new(),
 		Phase.PLACE: place_script.new(),
 	}
 
 
 func _init_rl_client() -> void:
+	var args := OS.get_cmdline_args()
+	var user_args := OS.get_cmdline_user_args()
+	print("[RL DEBUG] _init_rl_client: args=%s user_args=%s use_rl_bots=%s" % [args, user_args, use_rl_bots])
 	# #region agent log
-	var _dbg_args := OS.get_cmdline_args()
-	var _dbg_user_args := OS.get_cmdline_user_args()
-	_debug_log("A", "_init_rl_client", {"args": _dbg_args, "user_args": _dbg_user_args, "use_rl_bots_before": use_rl_bots})
+	_debug_log("A", "_init_rl_client", {"args": args, "user_args": user_args, "use_rl_bots_before": use_rl_bots})
 	# #endregion
 	# Check command line for --rl-bots flag (user args are after -- separator)
-	if "--rl-bots" in OS.get_cmdline_user_args() or "--rl-bots" in OS.get_cmdline_args():
+	if "--rl-bots" in user_args or "--rl-bots" in args:
 		use_rl_bots = true
+		print("[RL DEBUG] _init_rl_client: --rl-bots flag detected, enabling RL bots!")
 		DebugLogger.log("GameManager: RL bots enabled via command line")
+	else:
+		print("[RL DEBUG] _init_rl_client: --rl-bots flag NOT found in args")
 
 	# #region agent log
 	_debug_log("A", "_init_rl_client_after_check", {"use_rl_bots": use_rl_bots, "instance_id": get_instance_id()})
@@ -173,11 +207,13 @@ func _init_rl_client() -> void:
 		# #region agent log
 		_debug_log("A", "_init_rl_client_skipped", {"reason": "use_rl_bots is false"})
 		# #endregion
+		print("[RL DEBUG] _init_rl_client: SKIPPING - use_rl_bots is false")
 		return
 
 	# #region agent log
 	_debug_log("A", "_init_rl_client_creating", {"instance_id": get_instance_id()})
 	# #endregion
+	print("[RL DEBUG] _init_rl_client: Creating RLClient, connecting to %s" % rl_server_url)
 	_rl_client = RLClientScript.new()
 	_rl_client.name = "RLClient"
 	_rl_client.server_url = rl_server_url
@@ -190,6 +226,7 @@ func _init_rl_client() -> void:
 	_rl_client.error.connect(_on_rl_error)
 
 	_rl_client.connect_to_server()
+	print("[RL DEBUG] _init_rl_client: RLClient created and connecting, _rl_client=%s" % _rl_client)
 	# #region agent log
 	_debug_log("A", "_init_rl_client_created", {"server_url": rl_server_url, "instance_id": get_instance_id(), "rl_client_valid": _rl_client != null})
 	# #endregion
@@ -197,19 +234,23 @@ func _init_rl_client() -> void:
 
 
 func _on_rl_connected() -> void:
+	print("[RL DEBUG] >>> RL SERVER CONNECTED! <<<")
 	DebugLogger.log("GameManager: RL server connected")
 
 
 func _on_rl_disconnected() -> void:
+	print("[RL DEBUG] RL server DISCONNECTED, falling back to scripted bots")
 	DebugLogger.log("GameManager: RL server disconnected, using scripted fallback")
 
 
 func _on_rl_action_received(role: int, action: Dictionary) -> void:
+	print("[RL DEBUG] RL action received for role %d: %s" % [role, action])
 	DebugLogger.log("GameManager: RL action for role %d: %s" % [role, action])
 	_apply_bot_action(Role.values()[role], action)
 
 
 func _on_rl_error(message: String) -> void:
+	print("[RL DEBUG] RL ERROR: %s" % message)
 	DebugLogger.log("GameManager: RL error: %s" % message)
 
 
@@ -247,10 +288,12 @@ func start_game() -> void:
 ## Start singleplayer mode (for testing and offline play)
 ## In singleplayer, the local player is Mayor and advisors are bots
 func start_singleplayer() -> void:
+	print("[RL DEBUG] start_singleplayer() called, use_rl_bots=%s, _rl_client=%s" % [use_rl_bots, _rl_client])
 	# #region agent log
 	_debug_log("C", "start_singleplayer_called", {"phase": Phase.keys()[phase], "rl_client_exists": _rl_client != null, "instance_id": get_instance_id(), "use_rl_bots": use_rl_bots})
 	# #endregion
 	if phase != Phase.LOBBY:
+		print("[RL DEBUG] start_singleplayer: ABORT - phase is %s, not LOBBY" % Phase.keys()[phase])
 		return
 	local_role = Role.MAYOR
 	_role_by_peer[1] = Role.MAYOR
@@ -258,6 +301,7 @@ func start_singleplayer() -> void:
 
 	# Set advisors as bot-controlled
 	set_bot_roles([Role.INDUSTRY, Role.URBANIST])
+	print("[RL DEBUG] start_singleplayer: Bot roles set to %s" % [_bot_roles.map(func(r): return Role.keys()[r])])
 	# #region agent log
 	_debug_log("C", "start_singleplayer_bot_roles_set", {"bot_roles": _bot_roles.map(func(r): return Role.keys()[r])})
 	# #endregion
@@ -266,6 +310,7 @@ func start_singleplayer() -> void:
 
 
 func _initialize_game() -> void:
+	print("[RL DEBUG] _initialize_game() starting...")
 	_rng = RandomNumberGenerator.new()
 	if game_seed >= 0:
 		_rng.seed = game_seed
@@ -275,6 +320,7 @@ func _initialize_game() -> void:
 
 	# Start RL game session for bot tracking
 	if _rl_client:
+		print("[RL DEBUG] _initialize_game: Starting RL game session")
 		_rl_client.start_game_session(_rng.seed, {"local_role": Role.keys()[local_role]})
 
 	_build_deck()
@@ -285,6 +331,11 @@ func _initialize_game() -> void:
 	last_placement.clear()
 	turn_history.clear()
 
+	# Reset Mayor's endgame state
+	facilities = {"hearts": 1, "diamonds": 0} # Town center is A♥
+	city_complete = false
+	mayor_hit_mine = false
+
 	# Center tile starts as built (A♥)
 	built_hexes.clear()
 	built_hexes.append(town_center)
@@ -292,8 +343,11 @@ func _initialize_game() -> void:
 	# Show center as built visually
 	_show_initial_built_center()
 
+	print("[RL DEBUG] _initialize_game: Emitting initial fog...")
 	_emit_initial_fog()
+	print("[RL DEBUG] _initialize_game: Transitioning to DRAW phase...")
 	_transition_to(Phase.DRAW)
+	print("[RL DEBUG] _initialize_game() complete!")
 
 
 func _show_initial_built_center() -> void:
@@ -309,6 +363,7 @@ func _show_initial_built_center() -> void:
 # ─────────────────────────────────────────────────────────────────────────────
 
 func _transition_to(new_phase: Phase) -> void:
+	print("[RL DEBUG] _transition_to: %s -> %s" % [Phase.keys()[phase], Phase.keys()[new_phase]])
 	var old_phase := phase
 	phase = new_phase
 	phase_end_time = 0.0 # No timeouts - action driven
@@ -356,6 +411,62 @@ func reveal_card(index: int) -> void:
 	if handler:
 		handler.reveal(self, index)
 
+
+## ─────────────────────────────────────────────────────────────────────────────
+## CONTROL PHASE ACTIONS (NEW)
+## ─────────────────────────────────────────────────────────────────────────────
+
+## Mayor chooses to force suit assignments
+## config: 0 = Urbanist→Diamonds, Industry→Hearts
+##         1 = Urbanist→Hearts, Industry→Diamonds
+func force_suits(config: int) -> void:
+	if not _is_server():
+		_send_intent("force_suits", {"config": config})
+		return
+
+	var handler = _get_phase_handler(Phase.CONTROL)
+	if handler:
+		handler.force_suits(self, config)
+
+
+## Mayor chooses to force hex assignments
+## Each advisor MUST include their forced hex in their nominations
+func force_hexes(urbanist_hex: Vector3i, industry_hex: Vector3i) -> void:
+	if not _is_server():
+		_send_intent("force_hexes", {
+			"urbanist_hex": [urbanist_hex.x, urbanist_hex.y, urbanist_hex.z],
+			"industry_hex": [industry_hex.x, industry_hex.y, industry_hex.z],
+		})
+		return
+
+	var handler = _get_phase_handler(Phase.CONTROL)
+	if handler:
+		handler.force_hexes(self, urbanist_hex, industry_hex)
+
+
+## Get the forced suit for an advisor (if control_mode == FORCE_SUITS)
+## Returns -1 if no forced suit, or Suit value (0=HEARTS, 1=DIAMONDS)
+func get_forced_suit_for_role(role_key: String) -> int:
+	if control_mode != ControlMode.FORCE_SUITS:
+		return -1
+
+	if forced_suit_config == SuitConfig.URB_DIAMOND_IND_HEART:
+		return MapLayers.Suit.DIAMONDS if role_key == "urbanist" else MapLayers.Suit.HEARTS
+	else: # URB_HEART_IND_DIAMOND
+		return MapLayers.Suit.HEARTS if role_key == "urbanist" else MapLayers.Suit.DIAMONDS
+
+
+## Get the forced hex for an advisor (if control_mode == FORCE_HEXES)
+## Returns INVALID_HEX if no forced hex
+func get_forced_hex_for_role(role_key: String) -> Vector3i:
+	if control_mode != ControlMode.FORCE_HEXES:
+		return INVALID_HEX
+	return forced_hexes.get(role_key, INVALID_HEX)
+
+
+## ─────────────────────────────────────────────────────────────────────────────
+## NOMINATE PHASE ACTIONS
+## ─────────────────────────────────────────────────────────────────────────────
 
 ## Advisor commits their nomination with a claimed card (hidden until both commit)
 func commit_nomination(role: Role, hex: Vector3i, claimed_card: Dictionary = {}) -> void:
@@ -420,9 +531,32 @@ func place_card(card_index: int, hex: Vector3i) -> void:
 
 func _finish_game(reason: String) -> void:
 	DebugLogger.log("GameManager: GAME OVER - %s" % reason)
+
+	# Determine winner
+	var winner: String = ""
+	if mayor_hit_mine:
+		# Mayor loses immediately regardless of score
+		DebugLogger.log("GameManager: Mayor HIT A MINE - MAYOR LOSES!")
+		var ind_score: int = scores["industry"]
+		var urb_score: int = scores["urbanist"]
+		winner = "industry" if ind_score >= urb_score else "urbanist"
+	else:
+		# Normal score comparison
+		var max_score: int = max(scores["mayor"], max(scores["industry"], scores["urbanist"]))
+		if scores["mayor"] == max_score:
+			winner = "mayor"
+		elif scores["industry"] == max_score:
+			winner = "industry"
+		else:
+			winner = "urbanist"
+
 	DebugLogger.log("GameManager: Final scores - Mayor: %d, Industry: %d, Urbanist: %d" % [
 		scores["mayor"], scores["industry"], scores["urbanist"]
 	])
+	DebugLogger.log("GameManager: WINNER: %s (city_complete=%s, mayor_hit_mine=%s)" % [
+		winner, city_complete, mayor_hit_mine
+	])
+
 	phase = Phase.GAME_OVER
 	phase_end_time = 0.0
 
@@ -522,7 +656,7 @@ func _check_reality_is_spade(hex: Vector3i, _placed_card: Dictionary) -> bool:
 
 ## Calculate scores for a placement using the new nomination format
 ## Nominations format: {role: {hex: Vector3i, claim: Dictionary}}
-## mayor_hand: All 4 cards Mayor had this turn (for optimal build check)
+## mayor_hand: Unused (kept for API compatibility)
 func _calculate_scores_with_claims(card: Dictionary, hex: Vector3i, noms: Array, mayor_hand: Array = []) -> Dictionary:
 	return GameRules.calculate_turn_scores(
 		card,
@@ -900,10 +1034,12 @@ func set_bot_roles(roles: Array[Role]) -> void:
 
 ## Request bot action for a role (called by phase handlers or externally)
 func request_bot_action(role: Role) -> void:
+	print("[RL DEBUG] request_bot_action: role=%s, is_bot=%s, _rl_client=%s" % [Role.keys()[role], is_bot_role(role), _rl_client])
 	# #region agent log
 	_debug_log("B", "request_bot_action_entry", {"role": Role.keys()[role], "is_bot": is_bot_role(role), "rl_client_exists": _rl_client != null, "bot_roles": _bot_roles.map(func(r): return Role.keys()[r])})
 	# #endregion
 	if not is_bot_role(role):
+		print("[RL DEBUG] request_bot_action: SKIP - role %s is not a bot" % Role.keys()[role])
 		return
 
 	DebugLogger.log("GameManager: Requesting bot action for %s" % Role.keys()[role])
@@ -924,14 +1060,18 @@ func request_bot_action(role: Role) -> void:
 	_debug_log("H_D", "request_bot_action_observation", {"role": Role.keys()[role], "frontier_count": _frontier_count, "already_nominated_count": _already_nom.size(), "already_nominated": _already_nom, "sub_phase": _sub_phase})
 	_debug_log("B", "request_bot_action_branch", {"role": Role.keys()[role], "rl_client_exists": _rl_client != null, "rl_connected": _rl_connected})
 	# #endregion
+	print("[RL DEBUG] request_bot_action: _rl_client=%s, connected=%s" % [_rl_client, _rl_connected])
 	# Try RL client first, fall back to scripted
 	if _rl_client and _rl_client.is_connected_to_server():
+		print("[RL DEBUG] >>> USING RL CLIENT for %s <<<" % Role.keys()[role])
 		# #region agent log
 		_debug_log("B", "using_rl_client", {"role": Role.keys()[role]})
 		# #endregion
 		var action: Dictionary = await _rl_client.get_action_async(int(role), observation)
+		print("[RL DEBUG] RL action received for %s: %s" % [Role.keys()[role], action])
 		_apply_bot_action(role, action)
 	else:
+		print("[RL DEBUG] USING SCRIPTED FALLBACK for %s (rl_client=%s)" % [Role.keys()[role], _rl_client])
 		# #region agent log
 		_debug_log("B", "using_scripted_fallback", {"role": Role.keys()[role], "reason": "no_rl_client" if not _rl_client else "not_connected"})
 		# #endregion
@@ -995,6 +1135,17 @@ func _build_bot_observation(role: Role) -> Dictionary:
 					reality_tiles[[hex.x, hex.y, hex.z]] = card
 			observation["reality_tiles"] = reality_tiles
 
+	# Add control state (visible to all players)
+	observation["control_mode"] = int(control_mode)
+	if control_mode == ControlMode.FORCE_SUITS:
+		observation["forced_suit_config"] = int(forced_suit_config)
+	if control_mode == ControlMode.FORCE_HEXES:
+		var fh: Dictionary = {}
+		for key in forced_hexes:
+			var hex: Vector3i = forced_hexes[key]
+			fh[key] = [hex.x, hex.y, hex.z]
+		observation["forced_hexes"] = fh
+
 	return observation
 
 
@@ -1004,6 +1155,9 @@ func _get_scripted_bot_action(role: Role, observation: Dictionary) -> Dictionary
 	# Use revealed_cards (plural array) - bots use first revealed card for strategy
 	var revealed_cards: Array = observation.get("revealed_cards", [])
 	var revealed_card: Dictionary = revealed_cards[0] if not revealed_cards.is_empty() else {}
+	# #region agent log
+	_debug_log("H_E", "_get_scripted_bot_action_entry", {"role": Role.keys()[role], "phase": Phase.keys()[phase], "frontier_size": frontier.size(), "revealed_cards_count": revealed_cards.size(), "control_mode": ControlMode.keys()[control_mode]})
+	# #endregion
 
 	if role == Role.MAYOR:
 		if phase == Phase.DRAW:
@@ -1019,6 +1173,23 @@ func _get_scripted_bot_action(role: Role, observation: Dictionary) -> Dictionary
 					best_score = score
 					best_idx = i
 			return {"card_index": best_idx, "action_type": "reveal"}
+
+		elif phase == Phase.CONTROL:
+			# Scripted CONTROL: randomly choose suits or hexes
+			# For simplicity, always use force_suits with config based on revealed card suits
+			var revealed_suits: Array = []
+			for card in revealed_cards:
+				if card.has("suit"):
+					revealed_suits.append(card.get("suit"))
+
+			# If we have Hearts or Diamonds, prefer the config that matches
+			var config: int = 0
+			if MapLayers.Suit.DIAMONDS in revealed_suits:
+				config = 0 # Urb→Diamond
+			elif MapLayers.Suit.HEARTS in revealed_suits:
+				config = 1 # Urb→Heart
+
+			return {"config": config, "control_type": "suits", "action_type": "control"}
 
 		elif phase == Phase.PLACE:
 			# Simple: pick first card and first nomination from the array
@@ -1071,6 +1242,13 @@ func _get_scripted_bot_action(role: Role, observation: Dictionary) -> Dictionary
 		# Determine which nomination this is (1st or 2nd)
 		var is_second_nomination: bool = already_nominated.size() > 0
 
+		# Get forced constraints for this advisor
+		var forced_hex: Vector3i = get_forced_hex_for_role(role_key)
+		var forced_suit: int = get_forced_suit_for_role(role_key)
+		# #region agent log
+		_debug_log("H_BC", "_get_scripted_advisor_constraints", {"role": role_key, "control_mode": ControlMode.keys()[control_mode], "forced_hex": [forced_hex.x, forced_hex.y, forced_hex.z] if forced_hex != INVALID_HEX else "NONE", "forced_suit": forced_suit, "is_second_nomination": is_second_nomination, "visibility_count": visibility.size(), "filtered_visibility_count": filtered_visibility.size()})
+		# #endregion
+
 		var result := GameRules.pick_strategic_nomination(
 			int(role),
 			revealed_suit,
@@ -1079,12 +1257,54 @@ func _get_scripted_bot_action(role: Role, observation: Dictionary) -> Dictionary
 			revealed_value
 		)
 
+		var result_hex: Vector3i = result.get("hex", INVALID_HEX)
+		var result_claim: Dictionary = result.get("claim", {})
+
+		# FIX: Enforce forced_hex constraint - first nomination MUST be the forced hex
+		if forced_hex != INVALID_HEX and not is_second_nomination:
+			if result_hex != forced_hex:
+				result_hex = forced_hex
+				# Update claim to match reality at forced hex (if available)
+				if _hex_field and _hex_field.map_layers:
+					var reality_at_forced: Dictionary = _hex_field.map_layers.get_card(forced_hex)
+					if not reality_at_forced.is_empty():
+						result_claim = reality_at_forced.duplicate()
+				# #region agent log
+				_debug_log("H_BC", "_get_scripted_advisor_forced_hex_override", {"role": role_key, "original_hex": [result.hex.x, result.hex.y, result.hex.z] if result.hex != INVALID_HEX else "INVALID", "forced_to": [forced_hex.x, forced_hex.y, forced_hex.z]})
+				# #endregion
+
+		# FIX: Enforce forced_suit constraint on the claim
+		# If we have a forced suit and this is the 2nd nomination, check if 1st satisfied it
+		if forced_suit >= 0 and is_second_nomination:
+			var first_claim_suit: int = -1
+			var first_commits: Array = advisor_commits.get(role_key, [])
+			if not first_commits.is_empty():
+				first_claim_suit = first_commits[0].get("claim", {}).get("suit", -1)
+
+			# If first claim didn't use forced suit, second MUST use it
+			if first_claim_suit != forced_suit:
+				result_claim["suit"] = forced_suit
+				# Update rank to match the suit we're forcing
+				var forced_rank: String = GameRules._value_to_rank(result_claim.get("value", 7))
+				result_claim["rank"] = forced_rank
+				# #region agent log
+				_debug_log("H_BC", "_get_scripted_advisor_forced_suit_override", {"role": role_key, "original_suit": result.get("claim", {}).get("suit", -1), "forced_to": forced_suit, "first_claim_suit": first_claim_suit})
+				# #endregion
+
+		# #region agent log
+		var result_hex_arr: Array = [result_hex.x, result_hex.y, result_hex.z] if result_hex != INVALID_HEX else [0, 0, 0]
+		_debug_log("H_BC", "_get_scripted_advisor_result", {"role": role_key, "result_hex": result_hex_arr, "result_claim_suit": result_claim.get("suit", -1), "result_strategy": result.get("strategy", "unknown"), "forced_hex": [forced_hex.x, forced_hex.y, forced_hex.z] if forced_hex != INVALID_HEX else "NONE", "forced_suit": forced_suit})
+		# #endregion
+
 		return {
-			"hex": [result.hex.x, result.hex.y, result.hex.z] if result.hex != INVALID_HEX else [0, 0, 0],
-			"claim": result.get("claim", {}),
+			"hex": [result_hex.x, result_hex.y, result_hex.z] if result_hex != INVALID_HEX else [0, 0, 0],
+			"claim": result_claim,
 			"action_type": "nominate",
 		}
 
+	# #region agent log
+	_debug_log("H_E", "_get_scripted_bot_action_empty_fallback", {"role": Role.keys()[role], "phase": Phase.keys()[phase]})
+	# #endregion
 	return {}
 
 
@@ -1099,6 +1319,18 @@ func _apply_bot_action(role: Role, action: Dictionary) -> void:
 		if action_type == "reveal" or phase == Phase.DRAW:
 			var card_index: int = action.get("card_index", 0)
 			reveal_card(card_index)
+		elif action_type == "control" or phase == Phase.CONTROL:
+			# CONTROL phase: Mayor chooses how to constrain Advisors
+			var control_type: String = action.get("control_type", "suits")
+			if control_type == "hexes":
+				var urb_hex_arr: Array = action.get("urbanist_hex", [0, 0, 0])
+				var ind_hex_arr: Array = action.get("industry_hex", [0, 0, 0])
+				var urb_hex := Vector3i(urb_hex_arr[0], urb_hex_arr[1], urb_hex_arr[2])
+				var ind_hex := Vector3i(ind_hex_arr[0], ind_hex_arr[1], ind_hex_arr[2])
+				force_hexes(urb_hex, ind_hex)
+			else:
+				var config: int = action.get("config", 0)
+				force_suits(config)
 		elif action_type == "place" or phase == Phase.PLACE:
 			var card_index: int = action.get("card_index", 0)
 			var hex_arr: Array = action.get("hex", [0, 0, 0])
@@ -1126,6 +1358,10 @@ func _trigger_bot_actions_if_needed() -> void:
 
 	match phase:
 		Phase.DRAW:
+			if is_bot_role(Role.MAYOR):
+				request_bot_action(Role.MAYOR)
+		Phase.CONTROL:
+			# CONTROL phase: Mayor chooses how to constrain Advisors
 			if is_bot_role(Role.MAYOR):
 				request_bot_action(Role.MAYOR)
 		Phase.NOMINATE:
@@ -1212,7 +1448,7 @@ func mayor_place(card_index: int, cube: Vector3i) -> void:
 
 
 # #region agent log
-const DEBUG_LOG_PATH := "/Users/sweater/Github/collapsization/.cursor/debug.log"
+const DEBUG_LOG_PATH := "/Users/sweater/Github/collapsization-red/.cursor/debug.log"
 
 func _debug_log(hypothesis: String, message: String, data: Dictionary = {}) -> void:
 	var log_entry := {

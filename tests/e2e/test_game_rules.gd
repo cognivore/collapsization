@@ -83,9 +83,9 @@ func test_reveal_card_updates_state() -> void:
 	assert_true(1 in _gm.revealed_indices, "Card 1 should be in revealed indices")
 
 
-## Test 4: Reveal card transitions to nominate phase after 2 reveals
-## Note: With bots active, NOMINATE phase leads to immediate bot nominations and PLACE
-func test_reveal_transitions_to_nominate() -> void:
+## Test 4: Reveal card transitions to CONTROL phase after 2 reveals
+## Note: After CONTROL, Mayor must choose control mode to proceed to NOMINATE
+func test_reveal_transitions_to_control() -> void:
 	_gm.game_seed = TEST_SEED
 	_gm.start_singleplayer()
 	# Disable bots for this test to check intermediate state
@@ -95,7 +95,11 @@ func test_reveal_transitions_to_nominate() -> void:
 	assert_eq(_gm.phase, GameManager.Phase.DRAW, "Should still be in DRAW phase after first reveal")
 
 	_gm.reveal_card(1)
-	assert_eq(_gm.phase, GameManager.Phase.NOMINATE, "Should be in NOMINATE phase after second reveal")
+	assert_eq(_gm.phase, GameManager.Phase.CONTROL, "Should be in CONTROL phase after second reveal")
+
+	# Mayor chooses control mode to proceed to NOMINATE
+	_gm.force_suits(0) # Config A: Urb→Diamond, Ind→Heart
+	assert_eq(_gm.phase, GameManager.Phase.NOMINATE, "Should be in NOMINATE phase after control choice")
 
 
 ## Test 5: Nominations update state (now requires 4 nominations, 2 per advisor)
@@ -105,23 +109,31 @@ func test_nominations_update_state() -> void:
 	# Disable bots so we can test manual nomination flow
 	_gm.set_bot_roles([])
 	_gm.reveal_card(0)
-	_gm.reveal_card(1) # Need 2 reveals to transition to NOMINATE
+	_gm.reveal_card(1) # Need 2 reveals to transition to CONTROL
+
+	# Mayor must choose control mode to proceed to NOMINATE
+	assert_eq(_gm.phase, GameManager.Phase.CONTROL, "Should be in CONTROL phase")
+	_gm.force_suits(0) # Config A: Urb→Diamond, Ind→Heart
 
 	# Simulate advisor nominations with claimed cards (2 per advisor now)
 	var industry_hex1 := Vector3i(1, -1, 0)
 	var industry_hex2 := Vector3i(0, 1, -1)
 	var urbanist_hex1 := Vector3i(-1, 1, 0)
 	var urbanist_hex2 := Vector3i(-1, 0, 1)
-	var industry_claim := MapLayers.make_card(MapLayers.Suit.DIAMONDS, "K")
-	var urbanist_claim := MapLayers.make_card(MapLayers.Suit.HEARTS, "Q")
+	# Claims must respect forced suits: Industry must claim Hearts in at least one
+	var industry_claim1 := MapLayers.make_card(MapLayers.Suit.HEARTS, "K") # Forced suit
+	var industry_claim2 := MapLayers.make_card(MapLayers.Suit.DIAMONDS, "Q")
+	# Urbanist must claim Diamonds in at least one
+	var urbanist_claim1 := MapLayers.make_card(MapLayers.Suit.DIAMONDS, "J") # Forced suit
+	var urbanist_claim2 := MapLayers.make_card(MapLayers.Suit.HEARTS, "Q")
 
 	# Industry commits 2 nominations
-	_gm.commit_nomination(GameManager.Role.INDUSTRY, industry_hex1, industry_claim)
-	_gm.commit_nomination(GameManager.Role.INDUSTRY, industry_hex2, industry_claim)
+	_gm.commit_nomination(GameManager.Role.INDUSTRY, industry_hex1, industry_claim1)
+	_gm.commit_nomination(GameManager.Role.INDUSTRY, industry_hex2, industry_claim2)
 
 	# Urbanist commits 2 nominations
-	_gm.commit_nomination(GameManager.Role.URBANIST, urbanist_hex1, urbanist_claim)
-	_gm.commit_nomination(GameManager.Role.URBANIST, urbanist_hex2, urbanist_claim)
+	_gm.commit_nomination(GameManager.Role.URBANIST, urbanist_hex1, urbanist_claim1)
+	_gm.commit_nomination(GameManager.Role.URBANIST, urbanist_hex2, urbanist_claim2)
 
 	# All 4 nominations should be revealed
 	assert_eq(_gm.nominations.size(), 4, "Should have 4 nominations total")
@@ -189,6 +201,7 @@ func test_spades_ends_game() -> void:
 	_gm.place_card(0, target)
 
 	assert_eq(_gm.phase, GameManager.Phase.GAME_OVER, "Game should be over when reality is spades")
+	assert_true(_gm.mayor_hit_mine, "Mayor should be marked as hitting a mine")
 
 
 ## Test 7b: Playing a SPADE card does NOT end game if reality is not spades
@@ -248,6 +261,7 @@ func test_any_card_on_spade_reality_ends_game() -> void:
 	_gm.place_card(0, target)
 
 	assert_eq(_gm.phase, GameManager.Phase.GAME_OVER, "Game MUST end when building on ANY spade reality")
+	assert_true(_gm.mayor_hit_mine, "Mayor should be marked as hitting a mine")
 
 
 ## Test 7d: Spade penalty applies when lying about mine (bluff detection)
@@ -282,6 +296,7 @@ func test_spade_penalty_applies_when_lying_about_mine() -> void:
 	assert_eq(_gm.scores["industry"], 3 - 2, "Industry should get -2 penalty for lying about mine")
 	assert_eq(_gm.scores["urbanist"], 4 - 2, "Urbanist should get -2 penalty for lying about mine")
 	assert_eq(_gm.phase, GameManager.Phase.GAME_OVER, "Game should end on spade reality")
+	assert_true(_gm.mayor_hit_mine, "Mayor should be marked as hitting a mine")
 
 
 ## Test 7e: Honest spade warning gives +1 point
@@ -316,6 +331,7 @@ func test_honest_spade_warning_scores_point() -> void:
 	assert_eq(_gm.scores["industry"], 3 + 1, "Industry should get +1 for honest spade warning")
 	assert_eq(_gm.scores["urbanist"], 4 - 2, "Urbanist should get -2 penalty for lying")
 	assert_eq(_gm.phase, GameManager.Phase.GAME_OVER, "Game should end on spade reality")
+	assert_true(_gm.mayor_hit_mine, "Mayor should be marked as hitting a mine")
 
 
 ## Test 8: Scoring awards mayor for optimal guess
@@ -625,7 +641,8 @@ func test_cannot_renominate_built_hex() -> void:
 	# Disable bots so we can test manual nomination flow
 	_gm.set_bot_roles([])
 	_gm.reveal_card(0)
-	_gm.reveal_card(1) # Need 2 reveals
+	_gm.reveal_card(1) # Need 2 reveals to go to CONTROL
+	_gm.force_suits(0) # Proceed to NOMINATE
 
 	# Set up first round of nominations and build
 	var industry_hex := Vector3i(1, -1, 0)
@@ -636,10 +653,10 @@ func test_cannot_renominate_built_hex() -> void:
 	# Ensure reality at industry_hex is NOT spades (so game doesn't end)
 	_hex_field.map_layers.truth[industry_hex] = MapLayers.make_card(MapLayers.Suit.DIAMONDS, "Q")
 
-	# Commit 4 nominations (2 per advisor)
-	_gm.commit_nomination(GameManager.Role.INDUSTRY, industry_hex, MapLayers.make_card(MapLayers.Suit.DIAMONDS, "K"))
+	# Commit 4 nominations (2 per advisor) - respecting forced suits
+	_gm.commit_nomination(GameManager.Role.INDUSTRY, industry_hex, MapLayers.make_card(MapLayers.Suit.HEARTS, "K"))
 	_gm.commit_nomination(GameManager.Role.INDUSTRY, other_hex1, MapLayers.make_card(MapLayers.Suit.DIAMONDS, "Q"))
-	_gm.commit_nomination(GameManager.Role.URBANIST, urbanist_hex, MapLayers.make_card(MapLayers.Suit.HEARTS, "Q"))
+	_gm.commit_nomination(GameManager.Role.URBANIST, urbanist_hex, MapLayers.make_card(MapLayers.Suit.DIAMONDS, "Q"))
 	_gm.commit_nomination(GameManager.Role.URBANIST, other_hex2, MapLayers.make_card(MapLayers.Suit.HEARTS, "J"))
 
 	# Phase should now be PLACE
@@ -654,12 +671,14 @@ func test_cannot_renominate_built_hex() -> void:
 	# industry_hex should now be in built_hexes
 	assert_true(industry_hex in _gm.built_hexes, "Built hex should be tracked")
 
-	# Start new round
+	# Start new round - need 2 reveals + control mode
 	_gm.reveal_card(0)
+	_gm.reveal_card(1)
+	_gm.force_suits(0)
 
 	# Try to nominate the already-built hex (should be rejected silently)
 	var commits_before: int = _gm.advisor_commits["industry"].size()
-	_gm.commit_nomination(GameManager.Role.INDUSTRY, industry_hex, MapLayers.make_card(MapLayers.Suit.DIAMONDS, "A"))
+	_gm.commit_nomination(GameManager.Role.INDUSTRY, industry_hex, MapLayers.make_card(MapLayers.Suit.HEARTS, "A"))
 
 	# The nomination should not have been accepted
 	var commits_after: int = _gm.advisor_commits["industry"].size()
@@ -749,21 +768,24 @@ func test_lazy_reality_deck_invariants() -> void:
 func test_nomination_overlay_renders_without_type_error() -> void:
 	_gm.game_seed = TEST_SEED
 	_gm.start_singleplayer()
+	_gm.set_bot_roles([]) # Disable bots for manual control
 	_gm.reveal_card(0)
-	_gm.reveal_card(1) # Need 2 reveals
+	_gm.reveal_card(1) # Need 2 reveals to go to CONTROL
+	_gm.force_suits(0) # Proceed to NOMINATE
 
 	# Set up nominations with valid hexes from the visible ring (4 nominations, 2 per advisor)
 	var industry_hex1 := Vector3i(1, -1, 0)
 	var industry_hex2 := Vector3i(0, 1, -1)
 	var urbanist_hex1 := Vector3i(-1, 1, 0)
 	var urbanist_hex2 := Vector3i(-1, 0, 1)
-	var industry_claim := MapLayers.make_card(MapLayers.Suit.DIAMONDS, "K")
-	var urbanist_claim := MapLayers.make_card(MapLayers.Suit.HEARTS, "Q")
+	# Claims must respect forced suits
+	var industry_claim := MapLayers.make_card(MapLayers.Suit.HEARTS, "K") # Forced
+	var urbanist_claim := MapLayers.make_card(MapLayers.Suit.DIAMONDS, "Q") # Forced
 
 	_gm.commit_nomination(GameManager.Role.INDUSTRY, industry_hex1, industry_claim)
-	_gm.commit_nomination(GameManager.Role.INDUSTRY, industry_hex2, industry_claim)
+	_gm.commit_nomination(GameManager.Role.INDUSTRY, industry_hex2, MapLayers.make_card(MapLayers.Suit.DIAMONDS, "K"))
 	_gm.commit_nomination(GameManager.Role.URBANIST, urbanist_hex1, urbanist_claim)
-	_gm.commit_nomination(GameManager.Role.URBANIST, urbanist_hex2, urbanist_claim)
+	_gm.commit_nomination(GameManager.Role.URBANIST, urbanist_hex2, MapLayers.make_card(MapLayers.Suit.HEARTS, "Q"))
 
 	# This is the critical test: show_nominations must work without typed array errors
 	assert_eq(_gm.phase, GameManager.Phase.PLACE, "Should be in PLACE after all nominations")
@@ -836,11 +858,9 @@ func test_hud_click_routing_allows_world_clicks() -> void:
 # Under the NEW rule: Mayor scores only if no other hand_card could do better.
 
 
-## Regression Test 1: Different card in hand would achieve better distance
-## Mayor places Q♥ (distance=7) when 5♥ would have given distance=1
-## OLD RULE: +1 (Q♥ had best distance for Q♥)
-## NEW RULE: +0 (5♥ could have done better)
-func test_mayor_no_score_when_better_card_available() -> void:
+## Test: Mayor scores when suit matches (simple rule)
+## Mayor places Q♥ on Hearts reality -> +1 (suit matches)
+func test_mayor_scores_on_suit_match() -> void:
 	_gm.game_seed = TEST_SEED
 	_gm.start_singleplayer()
 
@@ -867,20 +887,17 @@ func test_mayor_no_score_when_better_card_available() -> void:
 	]
 
 	# Mayor plays Q♥ (index 0) on hex_a (reality 6♥)
-	# Distance = |13-6| = 7
-	# BUT: 5♥ on hex_a would give distance = |5-6| = 1 (BETTER!)
+	# Q♥ suit matches 6♥ suit -> +1 point
 	_gm.place_card(0, hex_a)
 
-	# NEW RULE: Mayor gets +0 because they didn't find the optimal build
-	assert_eq(_gm.scores["mayor"], 0,
-		"REGRESSION: Mayor should NOT score when another hand card could achieve lower distance")
+	# SIMPLIFIED RULE: Mayor gets +1 because suit matches
+	assert_eq(_gm.scores["mayor"], 1,
+		"Mayor should score +1 when placed card suit matches reality suit")
 
 
-## Regression Test 2: Mayor's card matches but another card would be exact match
-## Mayor places 8♥ (distance=3) when 5♥ would have given distance=0 (exact)
-## OLD RULE: +1 (8♥ had min distance for 8♥)
-## NEW RULE: +0 (5♥ would have been exact match)
-func test_mayor_no_score_when_exact_match_available() -> void:
+## Test: Mayor scores on any suit match (not just exact match)
+## Mayor places 8♥ on 5♥ reality -> +1 (Hearts matches Hearts)
+func test_mayor_scores_on_any_suit_match() -> void:
 	_gm.game_seed = TEST_SEED
 	_gm.start_singleplayer()
 
@@ -905,19 +922,16 @@ func test_mayor_no_score_when_exact_match_available() -> void:
 	]
 
 	# Mayor plays 8♥ on hex_a (reality 5♥)
-	# Distance = |8-5| = 3
-	# BUT: 5♥ on hex_a would give distance = 0 (EXACT MATCH!)
+	# 8♥ suit matches 5♥ suit -> +1 point
 	_gm.place_card(0, hex_a)
 
-	assert_eq(_gm.scores["mayor"], 0,
-		"REGRESSION: Mayor should NOT score when exact match was available with different card")
+	assert_eq(_gm.scores["mayor"], 1,
+		"Mayor should score +1 when suit matches (regardless of value)")
 
 
-## Regression Test 3: Mayor's card matches on chosen hex, but different card+hex combo is better
-## Mayor places 10♦ on hex_a (distance=4) when 7♥ on hex_b would give distance=1
-## OLD RULE: +1 (10♦ on hex_a was valid, best distance for 10♦)
-## NEW RULE: +0 (7♥ on hex_b would have been better overall)
-func test_mayor_no_score_when_better_card_hex_combo_exists() -> void:
+## Test: Mayor scores when suit matches, regardless of other options
+## Mayor places 10♦ on 6♦ reality -> +1 (Diamonds matches Diamonds)
+func test_mayor_scores_regardless_of_other_options() -> void:
 	_gm.game_seed = TEST_SEED
 	_gm.start_singleplayer()
 
@@ -942,18 +956,16 @@ func test_mayor_no_score_when_better_card_hex_combo_exists() -> void:
 	]
 
 	# Mayor plays 10♦ on hex_a (reality 6♦)
-	# Distance = |10-6| = 4
-	# BUT: 7♥ on hex_b would give distance = |7-8| = 1 (BETTER!)
+	# 10♦ suit matches 6♦ suit -> +1 point
 	_gm.place_card(0, hex_a)
 
-	assert_eq(_gm.scores["mayor"], 0,
-		"REGRESSION: Mayor should NOT score when better card+hex combination existed")
+	assert_eq(_gm.scores["mayor"], 1,
+		"Mayor should score +1 when suit matches (simple rule)")
 
 
-## Regression Test 4: Verify Mayor DOES score when truly optimal
-## Mayor places 7♥ (distance=1) and no other card could do better
-## This confirms the positive case still works correctly
-func test_mayor_scores_when_truly_optimal() -> void:
+## Test: Mayor scores when suit matches (basic case)
+## Mayor places 7♥ on 8♥ reality -> +1 (Hearts matches Hearts)
+func test_mayor_scores_basic_suit_match() -> void:
 	_gm.game_seed = TEST_SEED
 	_gm.start_singleplayer()
 
@@ -977,22 +989,17 @@ func test_mayor_scores_when_truly_optimal() -> void:
 		{"hex": hex_b, "claim": MapLayers.make_card(MapLayers.Suit.DIAMONDS, "10"), "advisor": "industry"},
 	]
 
-	# Check all possible plays:
-	# - 7♥ on hex_a (8♥): distance = 1
-	# - 7♥ on hex_b (10♦): no match
-	# - 2♦ on hex_a (8♥): no match
-	# - 2♦ on hex_b (10♦): distance = 8
-	# Global best = 1, Mayor plays 7♥ on hex_a achieving distance 1
-
+	# Mayor plays 7♥ on hex_a (reality 8♥)
+	# 7♥ suit matches 8♥ suit -> +1 point
 	_gm.place_card(0, hex_a)
 
 	assert_eq(_gm.scores["mayor"], 1,
-		"Mayor SHOULD score when they found the truly optimal build")
+		"Mayor should score +1 when suit matches")
 
 
-## Regression Test 5: Four cards in hand, only one optimal
-## Tests with full 4-card hand as per actual game rules
-func test_mayor_optimal_with_full_hand() -> void:
+## Test: Mayor scores with full hand when suit matches
+## Tests simple suit-match rule with 4-card hand
+func test_mayor_scores_with_full_hand_on_suit_match() -> void:
 	_gm.game_seed = TEST_SEED
 	_gm.start_singleplayer()
 
@@ -1018,20 +1025,12 @@ func test_mayor_optimal_with_full_hand() -> void:
 		{"hex": hex_b, "claim": MapLayers.make_card(MapLayers.Suit.DIAMONDS, "9"), "advisor": "industry"},
 	]
 
-	# Possible plays (excluding spades which would end game):
-	# - Q♥ on hex_a (4♥): |13-4| = 9
-	# - Q♥ on hex_b (9♦): no match
-	# - 10♦ on hex_a (4♥): no match
-	# - 10♦ on hex_b (9♦): |10-9| = 1 ← BEST
-	# - 3♥ on hex_a (4♥): |3-4| = 1 ← TIED FOR BEST
-	# - 3♥ on hex_b (9♦): no match
-	# Global best = 1
-
-	# Mayor plays Q♥ (index 0) on hex_a → distance 9, NOT optimal
+	# Mayor plays Q♥ (index 0) on hex_a (reality 4♥)
+	# Q♥ suit matches 4♥ suit -> +1 point
 	_gm.place_card(0, hex_a)
 
-	assert_eq(_gm.scores["mayor"], 0,
-		"REGRESSION: Mayor should NOT score with 4-card hand when better options exist")
+	assert_eq(_gm.scores["mayor"], 1,
+		"Mayor should score +1 when suit matches (simple rule)")
 
 
 ## Regression Test 6: Four cards, Mayor finds optimal
@@ -1110,6 +1109,161 @@ func test_spades_domain_affinity_nobody_scores_when_reality_not_spade() -> void:
 		"REGRESSION: Industry should NOT score when both claimed Spade but reality wasn't")
 	assert_eq(_gm.scores["urbanist"], 0,
 		"REGRESSION: Urbanist should NOT score when both claimed Spade but reality wasn't")
-	# Mayor should score (7♥ vs 8♥ = distance 1, optimal)
+	# Mayor should score (7♥ on 8♥ = suit match)
 	assert_eq(_gm.scores["mayor"], 1,
-		"Mayor should still score when finding optimal build")
+		"Mayor should score +1 when suit matches")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CONTROL PHASE REGRESSION TESTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+## Regression Test 8: Control phase transitions correctly to NOMINATE
+## Ensures the new CONTROL phase works in the game flow
+func test_control_phase_flow() -> void:
+	_gm.game_seed = TEST_SEED
+	_gm.start_singleplayer()
+
+	# Disable bots so we can test phase transitions manually
+	_gm.set_bot_roles([])
+
+	# Reveal 2 cards (one at a time) to complete DRAW phase
+	_gm.reveal_card(0)
+	_gm.reveal_card(1)
+	assert_eq(_gm.phase, GameManager.Phase.CONTROL,
+		"After revealing 2 cards, should transition to CONTROL phase")
+
+	# Force suits (config A: Urbanist→Diamond, Industry→Hearts)
+	_gm.force_suits(0)
+	assert_eq(_gm.phase, GameManager.Phase.NOMINATE,
+		"After Mayor chooses control mode, should transition to NOMINATE")
+	assert_eq(_gm.control_mode, GameManager.ControlMode.FORCE_SUITS,
+		"Control mode should be FORCE_SUITS")
+	assert_eq(_gm.forced_suit_config, GameManager.SuitConfig.URB_DIAMOND_IND_HEART,
+		"Forced suit config should be A (Urb→Diamond, Ind→Hearts)")
+
+
+## Regression Test 9: Forced suit constraint blocks invalid nominations
+## Ensures advisors cannot violate forced suit constraint
+func test_forced_suit_constraint_validation() -> void:
+	_gm.game_seed = TEST_SEED
+	_gm.start_singleplayer()
+
+	# Disable bots so we can test nominations manually
+	_gm.set_bot_roles([])
+
+	# Setup: complete DRAW (reveal 2 cards), force suits
+	_gm.reveal_card(0)
+	_gm.reveal_card(1)
+	_gm.force_suits(0) # Industry must claim Hearts
+
+	# Get a valid hex
+	var frontier := GameRules.get_playable_frontier(_gm.built_hexes)
+	var hex_a: Vector3i = frontier[0]
+	var hex_b: Vector3i = frontier[1] if frontier.size() > 1 else frontier[0]
+
+	# Industry's first nomination: can use any suit (constraint checked on second)
+	var spade_card := MapLayers.make_card(MapLayers.Suit.SPADES, "5")
+	_gm.commit_nomination(GameManager.Role.INDUSTRY, hex_a, spade_card)
+	assert_eq(_gm.advisor_commits["industry"].size(), 1,
+		"First nomination should succeed regardless of suit")
+
+	# Industry's second nomination: MUST use Hearts (since first was Spades)
+	var another_spade := MapLayers.make_card(MapLayers.Suit.SPADES, "7")
+	_gm.commit_nomination(GameManager.Role.INDUSTRY, hex_b, another_spade)
+	assert_eq(_gm.advisor_commits["industry"].size(), 1,
+		"REGRESSION: Second nomination with wrong suit should be REJECTED")
+
+	# Now try with correct suit (Hearts)
+	var hearts_card := MapLayers.make_card(MapLayers.Suit.HEARTS, "7")
+	_gm.commit_nomination(GameManager.Role.INDUSTRY, hex_b, hearts_card)
+	assert_eq(_gm.advisor_commits["industry"].size(), 2,
+		"Second nomination with correct forced suit should succeed")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MAYOR ENDGAME TESTS: Facilities & City Completion
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+## Test: Facilities initialization - Town center starts as 1 Hearts
+func test_facilities_initialization() -> void:
+	_gm.game_seed = TEST_SEED
+	_gm.start_singleplayer()
+
+	assert_eq(_gm.facilities["hearts"], 1, "Facilities should start with 1 Hearts (town center A♥)")
+	assert_eq(_gm.facilities["diamonds"], 0, "Facilities should start with 0 Diamonds")
+	assert_false(_gm.city_complete, "City should not be complete at start")
+	assert_false(_gm.mayor_hit_mine, "Mayor should not have hit a mine at start")
+
+
+## Test: Facility increments when building on Hearts/Diamonds reality
+func test_facility_increments_on_build() -> void:
+	_gm.game_seed = TEST_SEED
+	_gm.start_singleplayer()
+
+	var initial_hearts: int = _gm.facilities["hearts"]
+	var initial_diamonds: int = _gm.facilities["diamonds"]
+
+	# Set up to build on a Hearts reality hex
+	_gm.hand[0] = MapLayers.make_card(MapLayers.Suit.HEARTS, "Q")
+	_gm.reveal_card(0)
+
+	var hearts_hex := Vector3i(1, -1, 0)
+	_gm.nominations = [
+		{"hex": hearts_hex, "claim": MapLayers.make_card(MapLayers.Suit.HEARTS, "Q"), "advisor": "industry"},
+	]
+	_gm.phase = GameManager.Phase.PLACE
+
+	# Set REALITY to Hearts
+	_hex_field.map_layers.truth[hearts_hex] = MapLayers.make_card(MapLayers.Suit.HEARTS, "K")
+
+	_gm.place_card(0, hearts_hex)
+
+	assert_eq(_gm.facilities["hearts"], initial_hearts + 1, "Hearts facility should increment on Hearts reality build")
+	assert_eq(_gm.facilities["diamonds"], initial_diamonds, "Diamonds should not change")
+
+	# Now build on Diamonds reality
+	var diamonds_hex := Vector3i(0, 1, -1)
+	_gm.hand = [MapLayers.make_card(MapLayers.Suit.DIAMONDS, "J")]
+	_gm.nominations = [
+		{"hex": diamonds_hex, "claim": MapLayers.make_card(MapLayers.Suit.DIAMONDS, "J"), "advisor": "urbanist"},
+	]
+	_gm.phase = GameManager.Phase.PLACE
+
+	# Set REALITY to Diamonds
+	_hex_field.map_layers.truth[diamonds_hex] = MapLayers.make_card(MapLayers.Suit.DIAMONDS, "10")
+
+	_gm.place_card(0, diamonds_hex)
+
+	assert_eq(_gm.facilities["diamonds"], initial_diamonds + 1, "Diamonds facility should increment on Diamonds reality build")
+
+
+## Test: City completion ends game when Mayor reaches 10♥ + 10♦
+func test_city_completion_ends_game() -> void:
+	_gm.game_seed = TEST_SEED
+	_gm.start_singleplayer()
+
+	# Manually set facilities close to completion
+	_gm.facilities = {"hearts": 9, "diamonds": 10} # Just need 1 more Hearts
+
+	# Set up to build on a Hearts reality hex (completing the city)
+	_gm.hand[0] = MapLayers.make_card(MapLayers.Suit.HEARTS, "A")
+	_gm.reveal_card(0)
+
+	var final_hex := Vector3i(1, -1, 0)
+	_gm.nominations = [
+		{"hex": final_hex, "claim": MapLayers.make_card(MapLayers.Suit.HEARTS, "A"), "advisor": "industry"},
+	]
+	_gm.phase = GameManager.Phase.PLACE
+
+	# Set REALITY to Hearts (this completes the city)
+	_hex_field.map_layers.truth[final_hex] = MapLayers.make_card(MapLayers.Suit.HEARTS, "K")
+
+	_gm.place_card(0, final_hex)
+
+	assert_eq(_gm.facilities["hearts"], 10, "Hearts facilities should be 10")
+	assert_eq(_gm.facilities["diamonds"], 10, "Diamonds facilities should be 10")
+	assert_true(_gm.city_complete, "City should be marked as complete")
+	assert_false(_gm.mayor_hit_mine, "Mayor should NOT have hit a mine")
+	assert_eq(_gm.phase, GameManager.Phase.GAME_OVER, "Game should end on city completion")

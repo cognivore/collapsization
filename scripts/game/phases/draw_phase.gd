@@ -36,6 +36,6 @@ func reveal(gm, index: int) -> void:
 	gm.revealed_indices.append(index)
 	gm.hand_updated.emit(gm.hand, gm.revealed_indices)
 
-	# Transition to NOMINATE only after both cards revealed
+	# Transition to CONTROL only after both cards revealed
 	if gm.revealed_indices.size() >= 2:
-		gm._transition_to(gm.Phase.NOMINATE)
+		gm._transition_to(gm.Phase.CONTROL)

@@ -173,6 +173,7 @@ func test_spade_penalty_applied_when_lied_about_mine() -> void:
 	# Both advisors should get -2 penalty for LYING about mine
 	assert_eq(gm.scores["industry"], 3 - 2, "Industry gets -2 penalty for lying about spade")
 	assert_eq(gm.scores["urbanist"], 4 - 2, "Urbanist gets -2 penalty for lying about spade")
+	assert_true(gm.mayor_hit_mine, "Mayor should be marked as hitting a mine")
 
 
 func test_spade_honest_warning_scores_point() -> void:
@@ -201,6 +202,7 @@ func test_spade_honest_warning_scores_point() -> void:
 	# Industry warned honestly (+1), Urbanist lied (-2)
 	assert_eq(gm.scores["industry"], 3 + 1, "Industry gets +1 for honest spade warning")
 	assert_eq(gm.scores["urbanist"], 4 - 2, "Urbanist gets -2 penalty for lying about spade")
+	assert_true(gm.mayor_hit_mine, "Mayor should be marked as hitting a mine")
 
 
 func test_bluff_detection_mayor_trusts() -> void:

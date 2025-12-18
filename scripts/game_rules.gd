@@ -72,6 +72,86 @@ static func is_on_playable_frontier(hex: Vector3i, built_hexes: Array) -> bool:
 	return false
 
 
+## ─────────────────────────────────────────────────────────────────────────────
+## FORCED NOMINATION VALIDATION (NEW)
+## ─────────────────────────────────────────────────────────────────────────────
+
+## Check if a nomination satisfies the forced hex constraint
+## Returns true if no hex is forced, or if the hex matches the forced hex
+static func satisfies_forced_hex(
+	hex: Vector3i,
+	forced_hex: Vector3i,
+	is_first_nomination: bool
+) -> bool:
+	# No constraint
+	if forced_hex == INVALID_HEX:
+		return true
+	# First nomination MUST be the forced hex
+	if is_first_nomination:
+		return hex == forced_hex
+	# Second nomination can be anything (hex already forced in first)
+	return true
+
+
+## Check if a claim satisfies the forced suit constraint for an advisor
+## Parameters:
+##   claim: Dictionary with "suit" key
+##   forced_suit: The suit this advisor must claim (-1 if no constraint)
+##   is_first_nomination: Whether this is the advisor's first nomination
+##   first_claim_suit: The suit claimed in the first nomination (-1 if not yet committed)
+## Returns true if constraint is satisfied
+static func satisfies_forced_suit(
+	claim: Dictionary,
+	forced_suit: int,
+	is_first_nomination: bool,
+	first_claim_suit: int
+) -> bool:
+	# No constraint
+	if forced_suit < 0:
+		return true
+
+	var claim_suit: int = claim.get("suit", -1)
+
+	if is_first_nomination:
+		# First nomination can use any suit (constraint checked on second)
+		return true
+	else:
+		# Second nomination: at least one of the two must use forced suit
+		if first_claim_suit == forced_suit:
+			# First already satisfied the constraint
+			return true
+		else:
+			# Second MUST use the forced suit
+			return claim_suit == forced_suit
+
+
+## Get available claim cards that satisfy the forced suit constraint
+## Returns filtered tray of cards that can be legally claimed
+static func get_legal_claims_for_suit_constraint(
+	tray: Array,
+	forced_suit: int,
+	is_first_nomination: bool,
+	first_claim_suit: int
+) -> Array:
+	if forced_suit < 0:
+		return tray # No constraint, all cards legal
+
+	if is_first_nomination:
+		return tray # First nomination has no suit constraint
+
+	if first_claim_suit == forced_suit:
+		return tray # Already satisfied constraint
+
+	# Must use forced suit - filter tray
+	var filtered: Array = []
+	for card_idx in tray:
+		# Suit is determined by card index: suit = card_idx / 13
+		var suit: int = card_idx / 13
+		if suit == forced_suit:
+			filtered.append(card_idx)
+	return filtered
+
+
 ## Pick best hex for bot based on visible layer (legacy simple behavior)
 ## Returns the hex with highest non-spade value, or fallback to any on frontier
 static func pick_bot_nomination(
@@ -334,14 +414,13 @@ static func _value_to_rank(value: int) -> String:
 ##    - Mayor TRUSTS (plays same suit as claim): +1
 ##    - Mayor CALLS (plays different suit): +1 if honest, 0 if bluff caught
 ## 3. SPADE REALITY: ALL nominators scored (+1 if warned, -2 if lied)
-## 4. Mayor scores 1 only if their choice achieves the minimum possible distance
-##    across ALL hand cards × ALL nominated hexes (truly optimal build)
+## 4. Mayor scores +1 if placed card suit matches reality tile suit
 static func calculate_turn_scores(
 	placed_card: Dictionary,
 	chosen_hex: Vector3i,
 	nominations: Array, # Array of {hex, claim, advisor}
 	get_reality: Callable, # func(hex: Vector3i) -> Dictionary
-	mayor_hand: Array = [] # All 4 cards Mayor had this turn (for optimal build check)
+	_mayor_hand: Array = [] # Unused - kept for API compatibility
 ) -> Dictionary:
 	var scores := {"mayor": 0, "industry": 0, "urbanist": 0}
 
@@ -385,7 +464,7 @@ static func calculate_turn_scores(
 			var claim: Dictionary = nom.get("claim", {})
 			var claim_suit: int = claim.get("suit", -1)
 			if claim_suit == MapLayers.Suit.SPADES:
-				pass # Honest warning = 0 points (no reward for finding mines)
+				scores[advisor] += 1 # Honest warning = +1 point for accurate mine detection
 			else:
 				scores[advisor] -= 2 # Lied about mine, severe penalty
 			scored_advisors[advisor] = true
@@ -458,35 +537,17 @@ static func calculate_turn_scores(
 				scores[advisor] += 1
 			# else: Advisor bluffed AND Mayor caught it - 0 points
 
-	# MAYOR SCORING - optimal distance calculation
-	# Mayor scores only if they found the optimal build among ALL hand cards
+	# MAYOR SCORING - simple suit match
+	# Mayor scores +1 if their placed card's suit matches the reality tile's suit
 	if not reality_is_spade:
-		# Calculate the distance the Mayor actually achieved
-		var chosen_distance: int = _card_distance(placed_card, reality)
-
-		# Find the global minimum distance across ALL hand cards × ALL nominated hexes
-		# If mayor_hand is empty (legacy call), fall back to checking only placed_card
-		var cards_to_check: Array = mayor_hand if not mayor_hand.is_empty() else [placed_card]
-		var global_best_distance: int = 999999
-
-		for hand_card in cards_to_check:
-			var hand_suit: int = hand_card.get("suit", -1)
-			var hand_value: int = hand_card.get("value", 0)
-			for nom_hex in candidate_hexes:
-				var hex_reality: Dictionary = get_reality.call(nom_hex)
-				if hex_reality.is_empty():
-					continue
-				# Skip spade realities (game-ending)
-				if hex_reality.get("suit", -1) == MapLayers.Suit.SPADES:
-					continue
-				if hex_reality.get("suit", -1) == hand_suit:
-					var dist: int = abs(hand_value - hex_reality.get("value", 0))
-					if dist < global_best_distance:
-						global_best_distance = dist
-
-		# Mayor scores only if their choice equals the best possible
-		if chosen_distance >= 0 and chosen_distance <= global_best_distance:
+		var mayor_scores: bool = placed_suit == reality_suit
+		if mayor_scores:
 			scores["mayor"] = 1
+		print("[SCORING DEBUG] Mayor: placed %s on %s -> %s" % [
+			MapLayers.label(placed_card),
+			MapLayers.label(reality),
+			"+1 POINT!" if mayor_scores else "no point (suit mismatch)"
+		])
 
 	return scores
 

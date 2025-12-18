@@ -67,9 +67,13 @@ func _parse_args() -> void:
 			return
 
 	# Check for --rl-bots in user args (after -- separator)
+	print("[RL DEBUG] DemoLauncher._parse_args: args=%s user_args=%s" % [args, user_args])
 	if "--rl-bots" in user_args or "--rl-bots" in args:
 		use_rl_bots = true
+		print("[RL DEBUG] DemoLauncher: --rl-bots detected! use_rl_bots=true")
 		Log.game("DemoLauncher: RL bots mode enabled")
+	else:
+		print("[RL DEBUG] DemoLauncher: --rl-bots NOT found in args")
 
 	# Parse command-line args (for dedicated server, bots, etc.)
 	for i in range(args.size()):
@@ -276,10 +280,13 @@ func _start_server(net_mgr: Node) -> void:
 		net_mgr.player_joined.connect(_on_player_joined_server)
 
 	# Spawn bot clients (unless using RL bots which are in-process)
+	print("[RL DEBUG] DemoLauncher._start_server: use_rl_bots=%s" % use_rl_bots)
 	if not use_rl_bots:
+		print("[RL DEBUG] DemoLauncher: Spawning external bot processes (NOT using RL)")
 		await get_tree().create_timer(SPAWN_DELAY).timeout
 		_spawn_bots()
 	else:
+		print("[RL DEBUG] DemoLauncher: USING RL BOTS - skipping external spawn, calling _start_game()")
 		Log.game("DemoLauncher: Skipping external bot spawn (using RL bots)")
 		# For RL bots, start game immediately after short delay
 		await get_tree().create_timer(SPAWN_DELAY).timeout

@@ -174,7 +174,7 @@ static func _debug_log(hypothesis_id: String, message: String, data: Dictionary)
 		"data": data,
 		"sessionId": "debug-session"
 	}
-	var file := FileAccess.open("/Users/sweater/Github/collapsization/.cursor/debug.log", FileAccess.READ_WRITE)
+	var file := FileAccess.open("/Users/sweater/Github/collapsization-red/.cursor/debug.log", FileAccess.READ_WRITE)
 	if file:
 		file.seek_end()
 		file.store_line(JSON.stringify(log_entry))

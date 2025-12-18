@@ -4,12 +4,18 @@ class_name ActionPanel
 
 const INVALID_HEX := Vector3i(0x7FFFFFFF, 0, 0)
 
+## Phase constants (must match GameManager.Phase)
+const PHASE_DRAW := 1
+const PHASE_CONTROL := 2
+const PHASE_NOMINATE := 3
+const PHASE_PLACE := 4
+
 ## Compute which buttons should be visible/enabled for the given context.
 ## Returns a dictionary with reveal/commit/build visibility and disabled flags.
 func compute_state(role: int, phase: int, selected_card: int, selected_hex: Vector3i, revealed_indices: Array) -> Dictionary:
-	var show_reveal := role == 0 and phase == 1
-	var show_build := role == 0 and phase == 3
-	var show_commit := role != 0 and phase == 2 and selected_hex != INVALID_HEX
+	var show_reveal := role == 0 and phase == PHASE_DRAW
+	var show_build := role == 0 and phase == PHASE_PLACE
+	var show_commit := role != 0 and phase == PHASE_NOMINATE and selected_hex != INVALID_HEX
 	# Mayor must reveal 2 cards before nominations start
 	var can_reveal := selected_card >= 0 and revealed_indices.size() < 2 and selected_card not in revealed_indices
 
@@ -20,9 +26,9 @@ func compute_state(role: int, phase: int, selected_card: int, selected_hex: Vect
 		"reveal_disabled": not can_reveal,
 		"build_disabled": not (selected_card >= 0 and selected_hex != INVALID_HEX),
 		"commit_disabled": not show_commit,
-		"show_action_card": role == 0 and phase in [1, 3],
-		"action_reveal": phase == 1,
-		"action_build": phase == 3,
+		"show_action_card": role == 0 and phase in [PHASE_DRAW, PHASE_PLACE],
+		"action_reveal": phase == PHASE_DRAW,
+		"action_build": phase == PHASE_PLACE,
 	}
 
 

@@ -40,6 +40,30 @@ func commit(gm, role: int, hex: Vector3i, claimed_card: Dictionary = {}) -> void
 	if role_key.is_empty():
 		return
 
+	# Check if this is first or second nomination
+	var commits_array: Array = gm.advisor_commits[role_key]
+	var is_first_nom: bool = commits_array.size() == 0
+	var first_claim_suit: int = -1
+	if not is_first_nom and commits_array.size() > 0:
+		var first_claim: Dictionary = commits_array[0].get("claim", {})
+		first_claim_suit = first_claim.get("suit", -1)
+
+	# Validate forced hex constraint (if FORCE_HEXES mode)
+	var forced_hex: Vector3i = gm.get_forced_hex_for_role(role_key)
+	if not gm.GameRules.satisfies_forced_hex(hex, forced_hex, is_first_nom):
+		# #region agent log
+		gm._debug_log("H_C", "nominate_commit_forced_hex_fail", {"hex": [hex.x, hex.y, hex.z], "forced_hex": [forced_hex.x, forced_hex.y, forced_hex.z], "is_first": is_first_nom})
+		# #endregion
+		return
+
+	# Validate forced suit constraint (if FORCE_SUITS mode)
+	var forced_suit: int = gm.get_forced_suit_for_role(role_key)
+	if not gm.GameRules.satisfies_forced_suit(claimed_card, forced_suit, is_first_nom, first_claim_suit):
+		# #region agent log
+		gm._debug_log("H_C", "nominate_commit_forced_suit_fail", {"claim_suit": claimed_card.get("suit", -1), "forced_suit": forced_suit, "is_first": is_first_nom, "first_claim_suit": first_claim_suit})
+		# #endregion
+		return
+
 	# Prevent same hex twice for same advisor
 	for existing in gm.advisor_commits[role_key]:
 		if existing.get("hex") == hex:

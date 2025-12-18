@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from collapsization.constants import (
     Suit,
+    Phase,
     Role,
     NUM_CARDS,
     NUM_RANKS,
@@ -27,8 +28,13 @@ from collapsization.constants import (
 )
 from collapsization.game import (
     ACTION_REVEAL_BASE,
+    ACTION_CONTROL_SUIT_A,
+    ACTION_CONTROL_SUIT_B,
+    ACTION_CONTROL_HEX_BASE,
     ACTION_COMMIT_BASE,
     ACTION_BUILD_BASE,
+    MAX_FRONTIER_SIZE,
+    MAX_NOMINATIONS,
 )
 
 
@@ -300,7 +306,13 @@ class ScriptedAdvisorAgent:
 
 
 class ScriptedMayorAgent:
-    """Simple mayor agent that tries to match suits and avoid mines."""
+    """Strategic mayor agent that handles all game phases including Control Phase.
+
+    Strategy:
+    - DRAW: Reveal high-value non-spade cards to signal intent
+    - CONTROL: Choose Force Suits when hand has suit concentration, else Force Hexes
+    - PLACE: Match card suits to advisor claims, avoid spades
+    """
 
     def __init__(self, player_id: int = Role.MAYOR, seed: Optional[int] = None):
         if player_id != Role.MAYOR:
@@ -309,17 +321,21 @@ class ScriptedMayorAgent:
         self._rng = random.Random(seed)
 
     def step(self, state: pyspiel.State) -> int:
-        """Select action based on simple heuristics."""
+        """Select action based on strategic heuristics."""
         legal_actions = state.legal_actions(self.player_id)
         if not legal_actions:
             raise ValueError(f"No legal actions for player {self.player_id}")
 
-        # In reveal phase, prefer revealing a non-spade card
-        if state._phase.value == 1:  # DRAW phase
+        # DRAW phase: reveal cards
+        if state._phase == Phase.DRAW:
             return self._handle_reveal(state, legal_actions)
 
-        # In place phase, prefer non-spade cards and trust advisor claims
-        if state._phase.value == 3:  # PLACE phase
+        # CONTROL phase: choose how to constrain advisors
+        if state._phase == Phase.CONTROL:
+            return self._handle_control(state, legal_actions)
+
+        # PLACE phase: choose card and hex
+        if state._phase == Phase.PLACE:
             return self._handle_place(state, legal_actions)
 
         return self._rng.choice(legal_actions)
@@ -347,16 +363,102 @@ class ScriptedMayorAgent:
             best_action if best_action is not None else self._rng.choice(legal_actions)
         )
 
+    def _handle_control(self, state: pyspiel.State, legal_actions: list[int]) -> int:
+        """Choose control mode: Force Suits or Force Hexes.
+
+        Strategy:
+        - Count suit distribution in hand (after revealing 2 cards)
+        - If hand has 2+ cards of same non-spade suit → Force Suits (make advisors claim that suit)
+        - Otherwise → Force Hexes (probe frontier strategically)
+
+        For Force Suits:
+        - If hand is Hearts-heavy → Config B (Urb→Hearts) so Urbanist must claim Hearts
+        - If hand is Diamonds-heavy → Config A (Ind→Hearts) so we can match Diamonds freely
+
+        For Force Hexes:
+        - Pick hexes near the frontier edge (more uncertainty = more information gain)
+        """
+        hand = state._hand
+        revealed_indices = state._revealed_indices
+
+        # Count suits in remaining (unrevealed) hand
+        suit_counts = {Suit.HEARTS: 0, Suit.DIAMONDS: 0, Suit.SPADES: 0}
+        for i, card in enumerate(hand):
+            if i not in revealed_indices:
+                suit = card.get("suit", -1)
+                if suit in suit_counts:
+                    suit_counts[suit] += 1
+
+        # Also consider revealed cards for overall strategy
+        for idx in revealed_indices:
+            if 0 <= idx < len(hand):
+                suit = hand[idx].get("suit", -1)
+                if suit in suit_counts:
+                    suit_counts[suit] += 1
+
+        hearts_count = suit_counts[Suit.HEARTS]
+        diamonds_count = suit_counts[Suit.DIAMONDS]
+
+        # Decision: Force Suits if we have suit concentration
+        use_force_suits = hearts_count >= 2 or diamonds_count >= 2
+
+        if use_force_suits:
+            # Choose suit config based on our hand strength
+            if hearts_count >= diamonds_count:
+                # Hand is Hearts-heavy: Config B makes Urbanist claim Hearts
+                # This way, if Urbanist claims Hearts, we can trust and match
+                if ACTION_CONTROL_SUIT_B in legal_actions:
+                    return ACTION_CONTROL_SUIT_B
+            else:
+                # Hand is Diamonds-heavy: Config A makes Industry claim Hearts
+                # This frees us to match Diamonds with Industry's other claims
+                if ACTION_CONTROL_SUIT_A in legal_actions:
+                    return ACTION_CONTROL_SUIT_A
+
+            # Fallback to either suit config
+            if ACTION_CONTROL_SUIT_A in legal_actions:
+                return ACTION_CONTROL_SUIT_A
+            if ACTION_CONTROL_SUIT_B in legal_actions:
+                return ACTION_CONTROL_SUIT_B
+
+        # Force Hexes: pick frontier hexes strategically
+        frontier = state._get_playable_frontier()
+        if not frontier:
+            return self._rng.choice(legal_actions)
+
+        max_frontier = min(len(frontier), MAX_FRONTIER_SIZE)
+
+        # Heuristic: pick hexes that are far from town center (more uncertainty)
+        # Use simple index-based selection for variety
+        urb_hex_idx = self._rng.randint(0, max_frontier - 1)
+        ind_hex_idx = self._rng.randint(0, max_frontier - 1)
+
+        # Prefer different hexes for maximum information
+        if max_frontier > 1 and urb_hex_idx == ind_hex_idx:
+            ind_hex_idx = (ind_hex_idx + 1) % max_frontier
+
+        action = ACTION_CONTROL_HEX_BASE + urb_hex_idx * MAX_FRONTIER_SIZE + ind_hex_idx
+        if action in legal_actions:
+            return action
+
+        # Fallback: any legal control action
+        return self._rng.choice(legal_actions)
+
     def _handle_place(self, state: pyspiel.State, legal_actions: list[int]) -> int:
-        """Choose which card to place and where."""
-        # Simple heuristic: trust advisor claims, avoid placing spades
+        """Choose which card to place and where.
+
+        Strategy:
+        - Avoid placing spades (game-ending)
+        - Prefer matching card suit to advisor's claimed suit (trust or call bluff)
+        - Bonus for close value matches
+        """
         best_action = None
         best_score = -100
 
         for action in legal_actions:
             place_idx = action - ACTION_BUILD_BASE
-            card_idx = place_idx // 2
-            nom_idx = place_idx % 2
+            card_idx = place_idx // MAX_NOMINATIONS
+            nom_idx = place_idx % MAX_NOMINATIONS
 
             if card_idx >= len(state._hand):
                 continue
@@ -366,7 +468,7 @@ class ScriptedMayorAgent:
             card_value = card.get("value", 0)
 
             # Get nomination info
-            nominations = list(state._nominations.values())
+            nominations = state._nominations
             if nom_idx >= len(nominations):
                 continue
 

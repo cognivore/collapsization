@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from collapsization import CollapsizationGame, Role, Phase
+from collapsization.game import ACTION_CONTROL_SUIT_A
 from agents import (
     RandomAgent,
     ScriptedAdvisorAgent,
@@ -102,14 +103,19 @@ class TestScriptedAdvisorAgent:
         game = CollapsizationGame()
         state = game.new_initial_state()
 
-        # Process to nominate phase
+        # Process chance nodes (deal cards)
         while state.is_chance_node():
             outcomes = state.chance_outcomes()
             state.apply_action(outcomes[0][0])
 
-        # Mayor reveals
-        legal = state.legal_actions()
-        state.apply_action(legal[0])
+        # Mayor reveals 2 cards
+        for _ in range(2):
+            legal = state.legal_actions()
+            state.apply_action(legal[0])
+
+        # Mayor chooses control mode (transitions to NOMINATE)
+        assert state._phase == Phase.CONTROL
+        state.apply_action(ACTION_CONTROL_SUIT_A)
 
         # Now industry's turn in nominate phase
         assert state._phase == Phase.NOMINATE
